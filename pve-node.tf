@@ -11,55 +11,14 @@ resource "proxmox_virtual_environment_file" "llm_config" {
     timezone: Europe/Zurich
     users:
       - name: llm
-        groups:
-          - sudo
-          - render
-          - video
+        groups: [sudo]
         shell: /bin/bash
         ssh_authorized_keys:
           - ${trimspace(data.local_file.llm_public_key.content)}
         sudo: ALL=(ALL) NOPASSWD:ALL
-    package_update: true
-    package_upgrade: true
     packages:
       - qemu-guest-agent
-      - net-tools
-      - curl
       - openssh-server
-      - nvtop
-      - btop
-      - libatomic1
-      - libquadmath0
-      - amdgpu-dkms
-      - amdrocm7.14-gfx1201
-    bootcmd:
-      - mkdir -p -m 0755 /etc/apt/keyrings
-      - mkdir -p -m 0755 /mnt/models
-      - wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
-      - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/31.40.1/ubuntu resolute main" > /etc/apt/sources.list.d/amdgpu.list
-      - wget https://repo.amd.com/rocm/packages-multi-arch/gpg/rocm.gpg -O - | gpg --dearmor | sudo tee /etc/apt/keyrings/amdrocm.gpg > /dev/null
-      - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/amdrocm.gpg] https://repo.amd.com/rocm/packages-multi-arch/ubuntu2604 stable main" > /etc/apt/sources.list.d/rocm.list
-    write_files:
-      - path: /etc/udev/rules.d/70-amdgpu.rules
-        owner: root:root
-        permissions: '0644'
-        content: |
-          KERNEL=="kfd", GROUP="render", MODE="0666"
-          SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"
-    runcmd:
-      - mount -t virtiofs llm-models /mnt/models
-      - chown -R llm:llm /mnt/models
-      - systemctl enable qemu-guest-agent
-      - systemctl start qemu-guest-agent
-      - systemctl enable --now ssh
-      - udevadm control --reload-rules
-      - udevadm trigger
-      - echo "llm-models /mnt/models virtiofs defaults,_netdev 0 0" >> /etc/fstab
-      - echo "done" > /tmp/cloud-config.done
-    power_state:
-      mode: reboot
-      delay: "now"
-      message: "Rebooting to load AMDGPU drivers and mount VirtioFS shares"
     EOF
 
     file_name = "llm-config.yaml"
@@ -115,24 +74,41 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     bridge = "vmbr0"
   }
 
+  # GPU 1
   hostpci {
     device = "hostpci0"
-    id     = "0000:03:00"
+    id = "0000:03:00.0"
   }
-
   hostpci {
     device = "hostpci1"
-    id     = "0000:2d:00"
+    id = "0000:03:00.1"
   }
-
+  # GPU 2
   hostpci {
     device = "hostpci2"
-    id     = "0000:43:00"
+    id = "0000:2d:00.0"
   }
-
   hostpci {
     device = "hostpci3"
-    id     = "0000:63:00"
+    id = "0000:2d:00.1"
+  }
+  # GPU 3
+  hostpci {
+    device = "hostpci4"
+    id = "0000:43:00.0"
+  }
+  hostpci {
+    device = "hostpci5"
+    id = "0000:43:00.1"
+  }
+  # GPU 4
+  hostpci {
+    device = "hostpci6"
+    id = "0000:63:00.0"
+  }
+  hostpci {
+    device = "hostpci7"
+    id = "0000:63:00.1"
   }
 
   keyboard_layout = "de-ch"
@@ -142,4 +118,15 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     proxmox_download_file.ubuntu_cloud_image,
     proxmox_download_file.fedora_cloud_image
   ]
+}
+
+
+resource "null_resource" "configure_llm" {
+  triggers = {
+    vm_id = proxmox_virtual_environment_vm.llm_vm.id
+  }
+
+  provisioner "local-exec" {
+    command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/llm.yml"
+  }
 }

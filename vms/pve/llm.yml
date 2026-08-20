@@ -1,0 +1,105 @@
+---
+- name: Configure LLM VM
+  hosts: llm
+  become: true
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Wait for cloud-init apt to finish
+      ansible.builtin.shell: |
+        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+      changed_when: false
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Fetch and dearmor ROCm keys
+      ansible.builtin.shell: |
+        wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
+        wget -qO- https://repo.amd.com/rocm/packages-multi-arch/gpg/rocm.gpg | gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
+      args:
+        creates: /etc/apt/keyrings/amdrocm.gpg
+
+    - name: Add AMD repositories (deb822 format)
+      ansible.builtin.deb822_repository:
+        name: "{{ item.name }}"
+        types: deb
+        uris: "{{ item.uri }}"
+        suites: "{{ item.suite }}"
+        components: main
+        architectures: amd64
+        signed_by: "{{ item.key }}"
+      loop:
+        - name: amdgpu
+          uri: https://repo.radeon.com/amdgpu/31.40.1/ubuntu
+          suite: resolute
+          key: /etc/apt/keyrings/rocm.gpg
+        - name: rocm
+          uri: https://repo.amd.com/rocm/packages-multi-arch/ubuntu2604
+          suite: stable
+          key: /etc/apt/keyrings/amdrocm.gpg
+
+    - name: Install packages
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - curl
+          - net-tools
+          - nvtop
+          - btop
+          - libatomic1
+          - libquadmath0
+          - amdgpu-dkms
+          - amdrocm7.14-gfx1201
+      register: apt_result
+
+    - name: Ensure GPU groups exist
+      ansible.builtin.group:
+        name: "{{ item }}"
+        state: present
+      loop: [ render, video ]
+
+    - name: Add llm to GPU groups
+      ansible.builtin.user:
+        name: llm
+        groups: render,video
+        append: true
+
+    - name: Deploy udev rules
+      ansible.builtin.copy:
+        dest: /etc/udev/rules.d/70-amdgpu.rules
+        mode: "0644"
+        content: |
+          KERNEL=="kfd", GROUP="render", MODE="0666"
+          SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"
+      notify: reload udev
+
+    - name: Mount virtiofs shares persistently
+      ansible.builtin.mount:
+        path: "{{ item.path }}"
+        src: "{{ item.src }}"
+        fstype: virtiofs
+        opts: defaults,_netdev
+        state: mounted
+      loop:
+        - { src: llm-models, path: /mnt/models }
+
+    - name: Push my scripts (this is your "upload" mechanism)
+      ansible.builtin.copy:
+        src: scripts/
+        dest: /home/llm/scripts/
+        mode: "0755"
+
+    - name: Reboot only when drivers changed, and wait for it to come back
+      ansible.builtin.reboot:
+      when: apt_result.changed
+
+  handlers:
+    - name: reload udev
+      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
