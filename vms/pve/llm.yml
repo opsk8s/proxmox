@@ -45,6 +45,48 @@
           suite: stable
           key: /etc/apt/keyrings/amdrocm.gpg
 
+    - name: Remove legacy/conflicting AMD source files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/amdgpu.sources
+        - /etc/apt/sources.list.d/rocm.sources
+
+    - name: Enable Ubuntu universe repository
+      ansible.builtin.deb822_repository:
+        name: ubuntu
+        types:
+          - deb
+        uris:
+          - http://archive.ubuntu.com/ubuntu
+        suites:
+          - resolute
+          - resolute-updates
+        components:
+          - main
+          - universe
+        state: present
+
+    - name: Upgrade all system packages to the latest version
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        autoremove: true
+      register: apt_upgrade_result
+
+    - name: Check if a reboot is required (e.g., kernel upgrade)
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_required_file
+
+    - name: Reboot the system if a kernel or critical update was installed
+      ansible.builtin.reboot:
+        msg: "Rebooting to apply kernel/driver updates..."
+        reboot_timeout: 600  # Give it 10 minutes to shut down and boot back up (DKMS can slow down boot)
+        test_command: uptime
+      when: reboot_required_file.stat.exists
+
     - name: Install packages
       ansible.builtin.apt:
         update_cache: true
@@ -56,7 +98,19 @@
           - libatomic1
           - libquadmath0
           - amdgpu-dkms
-          - amdrocm7.14-gfx1201
+          - amdrocm-core-sdk7.14-gfx1201
+          - build-essential
+          - cmake
+          - git
+          - pkg-config
+          - libvulkan-dev
+          - mesa-vulkan-drivers
+          - vulkan-tools
+          - glslang-tools
+          - libssl-dev
+          - glslc
+          - spirv-headers
+          - ninja-build
       register: apt_result
 
     - name: Ensure GPU groups exist
@@ -90,15 +144,138 @@
       loop:
         - { src: llm-models, path: /mnt/models }
 
+    - name: Grant llm user read-write access to the mount point
+      ansible.builtin.file:
+        path: /mnt/models
+        owner: llm
+        group: llm
+        mode: "0775"
+
     - name: Push my scripts (this is your "upload" mechanism)
       ansible.builtin.copy:
         src: scripts/
         dest: /home/llm/scripts/
+        owner: llm
+        group: llm
         mode: "0755"
 
     - name: Reboot only when drivers changed, and wait for it to come back
       ansible.builtin.reboot:
       when: apt_result.changed
+
+    - name: Set ROCm environment variables system-wide
+      ansible.builtin.copy:
+        dest: /etc/profile.d/rocm-env.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # rocm related
+          export ROCM_PATH=/opt/rocm
+          export HIP_PATH=$ROCM_PATH
+          export HIP_CLANG_PATH="$ROCM_PATH/llvm/bin"
+          export BITCODE_PATH=$(find $ROCM_PATH -type d -name bitcode -print -quit)
+          export PATH="$ROCM_PATH/bin:$ROCM_PATH/llvm/bin:$PATH"
+          export LD_LIBRARY_PATH="$ROCM_PATH/lib:$ROCM_PATH/lib64:$ROCM_PATH/llvm/lib"
+          export HIP_PLATFORM=amd
+          export PYTORCH_ROCM_ARCH="gfx1201"
+          export HIP_ARCHITECTURES="gfx1201"
+          export GPU_TARGETS="gfx1201"
+          # build and vllm related
+          export MAX_JOBS=$(nproc)
+          export CMAKE_BUILD_PARALLEL_LEVEL=$MAX_JOBS
+          export TORCHINDUCTOR_COMPILE_THREADS=$MAX_JOBS
+          export OMP_NUM_THREADS=$MAX_JOBS
+          export MKL_NUM_THREADS=$MAX_JOBS
+          export NUMEXPR_NUM_THREADS=$MAX_JOBS
+          export OPENBLAS_NUM_THREADS=$MAX_JOBS
+      
+
+    - name: Install nvm (Node Version Manager)
+      ansible.builtin.shell: >
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | PROFILE=/dev/null bash
+      args:
+        creates: /home/llm/.nvm/nvm.sh
+      become: true
+      become_user: llm
+
+    - name: Add nvm sourcing to llm user's bashrc
+      ansible.builtin.blockinfile:
+        path: /home/llm/.bashrc
+        owner: llm
+        group: llm
+        marker: "# {mark} ANSIBLE MANAGED BLOCK: NVM"
+        block: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
+    - name: Install Node.js LTS and set as default
+      ansible.builtin.shell: |
+        source /home/llm/.nvm/nvm.sh
+        nvm install --lts
+        nvm alias default 'lts/*'
+      args:
+        executable: /bin/bash
+      become: true
+      become_user: llm
+      register: nvm_result
+      changed_when: "'already installed' not in nvm_result.stdout"
+
+    - name: Install uv (Python package manager)
+      ansible.builtin.shell: >
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: /home/llm/.local/bin/uv
+      become: true
+      become_user: llm
+
+    - name: Ensure ~/.local/bin is in llm user's PATH
+      ansible.builtin.lineinfile:
+        path: /home/llm/.bashrc
+        line: 'export PATH="$HOME/.local/bin:$PATH"'
+        regexp: '^export PATH="\$HOME/\.local/bin:\$PATH"'
+        create: true
+        owner: llm
+        group: llm
+        mode: "0644"
+
+    - name: Clone llama.cpp repository into llm user's home directory
+      ansible.builtin.git:
+        repo: 'https://github.com/ggerganov/llama.cpp.git'
+        dest: /home/llm/llama.cpp
+        version: master  # You can change this to a specific tag like 'b3995' for reproducible builds
+      become: true
+      become_user: llm
+
+    - name: Build llama.cpp using the ROCm build script
+      ansible.builtin.shell: |
+        # Explicitly load the ROCm environment variables we added earlier
+        source /home/llm/.bashrc
+
+        # Execute the build script
+        /home/llm/scripts/build-llama-rocm.sh
+      args:
+        executable: /bin/bash
+        # Idempotency: Skip this task if the final compiled binary already exists.
+        # (Adjust this path if your script outputs the binary somewhere else)
+        creates: /home/llm/llama.cpp/build-rocm/bin/llama-cli
+      become: true
+      become_user: llm
+
+    - name: Build llama.cpp using the Vulkan build script
+      ansible.builtin.shell: |
+        # Explicitly load the ROCm environment variables we added earlier
+        source /home/llm/.bashrc
+
+        # Execute the build script
+        /home/llm/scripts/build-llama-vulkan.sh
+      args:
+        executable: /bin/bash
+        # Idempotency: Skip this task if the final compiled binary already exists.
+        # (Adjust this path if your script outputs the binary somewhere else)
+        creates: /home/llm/llama.cpp/build-vulkan/bin/llama-cli
+      become: true
+      become_user: llm
 
   handlers:
     - name: reload udev

@@ -49,7 +49,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 
   cpu {
     sockets = 1
-    cores   = 8
+    cores   = 16
   }
 
   memory {
