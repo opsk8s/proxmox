@@ -26,9 +26,14 @@
         state: directory
         mode: "0755"
 
-    - name: Fetch and dearmor ROCm keys
+    - name: Fetch and dearmor Radeon ROCm key
       ansible.builtin.shell: |
         wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
+      args:
+        creates: /etc/apt/keyrings/rocm.gpg
+
+    - name: Fetch and dearmor AMD ROCm multi-arch key
+      ansible.builtin.shell: |
         wget -qO- https://repo.amd.com/rocm/packages-multi-arch/gpg/rocm.gpg | gpg --dearmor -o /etc/apt/keyrings/amdrocm.gpg
       args:
         creates: /etc/apt/keyrings/amdrocm.gpg
@@ -52,29 +57,6 @@
           suite: stable
           key: /etc/apt/keyrings/amdrocm.gpg
 
-    - name: Remove legacy/conflicting AMD source files
-      ansible.builtin.file:
-        path: "{{ item }}"
-        state: absent
-      loop:
-        - /etc/apt/sources.list.d/amdgpu.sources
-        - /etc/apt/sources.list.d/rocm.sources
-
-    - name: Enable Ubuntu universe repository
-      ansible.builtin.deb822_repository:
-        name: ubuntu
-        types:
-          - deb
-        uris:
-          - http://archive.ubuntu.com/ubuntu
-        suites:
-          - resolute
-          - resolute-updates
-        components:
-          - main
-          - universe
-        state: present
-
     - name: Upgrade all system packages to the latest version
       ansible.builtin.apt:
         update_cache: true
@@ -93,6 +75,10 @@
         reboot_timeout: 600  # Give it 10 minutes to shut down and boot back up (DKMS can slow down boot)
         test_command: uptime
       when: reboot_required_file.stat.exists
+
+    - name: Enable Universe repository
+      ansible.builtin.command:
+        cmd: add-apt-repository -y universe
 
     - name: Install packages
       ansible.builtin.apt:
