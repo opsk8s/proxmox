@@ -77,38 +77,22 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   # GPU 1
   hostpci {
     device = "hostpci0"
-    id = "0000:03:00.0"
-  }
-  hostpci {
-    device = "hostpci1"
-    id = "0000:03:00.1"
+    id = "0000:03:00"
   }
   # GPU 2
   hostpci {
-    device = "hostpci2"
-    id = "0000:2d:00.0"
-  }
-  hostpci {
-    device = "hostpci3"
-    id = "0000:2d:00.1"
+    device = "hostpci1"
+    id = "0000:2d:00"
   }
   # GPU 3
   hostpci {
-    device = "hostpci4"
-    id = "0000:43:00.0"
-  }
-  hostpci {
-    device = "hostpci5"
-    id = "0000:43:00.1"
+    device = "hostpci2"
+    id = "0000:43:00"
   }
   # GPU 4
   hostpci {
-    device = "hostpci6"
-    id = "0000:63:00.0"
-  }
-  hostpci {
-    device = "hostpci7"
-    id = "0000:63:00.1"
+    device = "hostpci3"
+    id = "0000:63:00"
   }
 
   keyboard_layout = "de-ch"
