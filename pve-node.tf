@@ -54,8 +54,12 @@ resource "proxmox_virtual_environment_file" "llm_config" {
       - systemctl enable --now ssh
       - udevadm control --reload-rules
       - udevadm trigger
+      - echo "llm-models /mnt/models virtiofs defaults,_netdev 0 0" >> /etc/fstab
       - echo "done" > /tmp/cloud-config.done
-      - reboot
+    power_state:
+      mode: reboot
+      delay: "now"
+      message: "Rebooting to load AMDGPU drivers and mount VirtioFS shares"
     EOF
 
     file_name = "llm-config.yaml"

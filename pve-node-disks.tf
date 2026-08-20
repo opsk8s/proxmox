@@ -4,7 +4,7 @@ resource "proxmox_storage_directory" "llm_models" {
   nodes = [var.main_node]
 
   content = ["images"]
-  shared  = true
+  shared  = false
   disable = false
 
   backups {
@@ -19,7 +19,7 @@ resource "proxmox_storage_directory" "git_storage" {
   nodes = [var.main_node]
 
   content = ["images"]
-  shared  = true
+  shared  = false
   disable = false
 
   backups {
