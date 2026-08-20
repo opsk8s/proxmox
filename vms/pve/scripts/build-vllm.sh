@@ -1,15 +1,14 @@
-#!/bin/bash
-cd
-pwd
-rm -fR .vllm/
-uv venv .vllm --python 3.14 --seed
+# build vllm
+source $HOME/.bashrc
+rm -fR $HOME/.vllm
+uv venv $HOME/.vllm --python 3.14 --seed
 
-echo 'export PYTHONPATH=$VIRTUAL_ENV/lib/python3.14/site-packages/_rocm_sdk_core/share/amd_smi' >> ~/.vllm/bin/activate
-echo 'export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE' >> ~/.vllm/bin/activate
-echo 'export AITER_USE_SYSTEM_TRITON=1' >> ~/.vllm/bin/activate
-echo 'export PYTORCH_ROCM_ARCH="gfx1201"' >> ~/.vllm/bin/activate
+echo 'export PYTHONPATH=$VIRTUAL_ENV/lib/python3.14/site-packages/_rocm_sdk_core/share/amd_smi' >> $HOME/.vllm/bin/activate
+echo 'export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE' >> $HOME/.vllm/bin/activate
+echo 'export AITER_USE_SYSTEM_TRITON=1' >> $HOME/.vllm/bin/activate
+echo 'export PYTORCH_ROCM_ARCH="gfx1201"' >> $HOME/.vllm/bin/activate
 
-source .vllm/bin/activate
+source $HOME/.vllm/bin/activate
 # export PYTHONPATH=$VIRTUAL_ENV/lib/python3.14/site-packages/_rocm_sdk_core/share/amd_smi
 # export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 # export AITER_USE_SYSTEM_TRITON=1
@@ -24,24 +23,23 @@ uv pip install https://rocm.frameworks.amd.com/whl-multi-arch/vllm-rdna/vllm/vll
 
 uv pip uninstall flash-attn aiter
 
-rm -fR builds
-mkdir builds 
+rm -fR $HOME/builds
+mkdir $HOME/builds
 
-cd builds
+cd $HOME/builds
 git clone -b v2.8.3.post1 --recursive https://github.com/Dao-AILab/flash-attention
 cd flash-attention
 BUILD_TARGET=rocm python setup.py install
 
-cd
-cd builds
+cd $HOME/builds
 git clone --recursive https://github.com/ROCm/aiter.git
 cd aiter
 python setup.py develop
 
-cd 
-cp -r /opt/rocm/share/amd_smi ~/builds/amd_smi
-chown -R llm:llm builds/
-uv pip install builds/amd_smi/
+cd $HOME/builds
+cp -r /opt/rocm/share/amd_smi $HOME/builds/amd_smi
+chown -R llm:llm $HOME/builds/
+uv pip install $HOME/builds/amd_smi/
 
 # uv pip install --upgrade numba scipy huggingface-hub[cli]  setuptools_scm
 
