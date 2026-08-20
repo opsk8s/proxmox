@@ -60,7 +60,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     datastore_id = var.vm_dir
     file_id      = proxmox_download_file.ubuntu_cloud_image.id
     interface    = "virtio0"
-    size         = 20
+    size         = 100
     backup       = true
   }
 
@@ -108,6 +108,11 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 resource "null_resource" "configure_llm" {
   triggers = {
     vm_id = proxmox_virtual_environment_vm.llm_vm.id
+    playbook = filesha256("${path.module}/vms/pve/llm.yml")
+    files = sha256(join("", [
+      for file in fileset("${path.module}/vms/pve/scripts", "*") :
+      "${file}:${filesha256("${path.module}/vms/pve/scripts/${file}")}"
+    ]))
   }
 
   provisioner "local-exec" {

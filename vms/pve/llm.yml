@@ -277,6 +277,21 @@
       become: true
       become_user: llm
 
+    - name: Build vllm using python 3.14
+      ansible.builtin.shell: |
+        # Explicitly load the ROCm environment variables we added earlier
+        source /home/llm/.bashrc
+
+        # Execute the build script
+        /home/llm/scripts/build-vllm.sh
+      args:
+        executable: /bin/bash
+        # Idempotency: Skip this task if the final compiled binary already exists.
+        # (Adjust this path if your script outputs the binary somewhere else)
+        creates: /home/llm/.vllm/bin/activate
+      become: true
+      become_user: llm
+
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger

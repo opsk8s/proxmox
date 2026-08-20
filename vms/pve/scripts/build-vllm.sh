@@ -2,7 +2,7 @@
 cd
 pwd
 rm -fR .vllm/
-uv venv --python 3.14 .vllm 
+uv venv .vllm --python 3.14 --seed
 
 echo 'export PYTHONPATH=$VIRTUAL_ENV/lib/python3.14/site-packages/_rocm_sdk_core/share/amd_smi' >> ~/.vllm/bin/activate
 echo 'export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE' >> ~/.vllm/bin/activate
@@ -14,7 +14,6 @@ source .vllm/bin/activate
 # export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
 # export AITER_USE_SYSTEM_TRITON=1
 
-uv run --python 3.14 python -m ensurepip --upgrade
 uv pip install ninja cmake wheel pybind11 flydsl
 uv pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "torch[device-gfx1201]==2.11.0+rocm7.14.0" "torchvision[device-gfx1201]==0.26.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"
 
