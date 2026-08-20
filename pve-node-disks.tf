@@ -27,3 +27,27 @@ resource "proxmox_storage_directory" "git_storage" {
     keep_daily            = 7
   }
 }
+
+# Map the models directory
+resource "proxmox_hardware_mapping_dir" "llm_models_mapping" {
+  name = "llm-models" # This is the "tag" we will mount inside the VM
+
+  map = [
+    {
+      node = var.main_node
+      path = proxmox_storage_directory.llm_models.path # Uses "/os-ssd-fast/models"
+    }
+  ]
+}
+
+# Map the git directory
+resource "proxmox_hardware_mapping_dir" "git_storage_mapping" {
+  name = "git-server" # This is the "tag" we will mount inside the VM
+
+  map = [
+    {
+      node = var.main_node
+      path = proxmox_storage_directory.git_storage.path # Uses "/os-ssd-fast/git"
+    }
+  ]
+}

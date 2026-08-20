@@ -34,6 +34,7 @@ resource "proxmox_virtual_environment_file" "llm_config" {
       - amdrocm7.14-gfx1201
     bootcmd:
       - mkdir -p -m 0755 /etc/apt/keyrings
+      - mkdir -p -m 0755 /mnt/models
       - wget -qO- https://repo.radeon.com/rocm/rocm.gpg.key | gpg --dearmor -o /etc/apt/keyrings/rocm.gpg
       - echo "deb [arch=amd64 signed-by=/etc/apt/keyrings/rocm.gpg] https://repo.radeon.com/amdgpu/31.40.1/ubuntu resolute main" > /etc/apt/sources.list.d/amdgpu.list
       - wget https://repo.amd.com/rocm/packages-multi-arch/gpg/rocm.gpg -O - | gpg --dearmor | sudo tee /etc/apt/keyrings/amdrocm.gpg > /dev/null
@@ -46,6 +47,8 @@ resource "proxmox_virtual_environment_file" "llm_config" {
           KERNEL=="kfd", GROUP="render", MODE="0666"
           SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"
     runcmd:
+      - mount -t virtiofs llm-models /mnt/models
+      - chown -R llm:llm /mnt/models
       - systemctl enable qemu-guest-agent
       - systemctl start qemu-guest-agent
       - systemctl enable --now ssh
@@ -98,11 +101,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     backup       = true
   }
 
-  disk {
-    datastore_id = var.vm_dir
-    interface    = "virtio0"
-    size         = 20
-    backup       = true
+  virtiofs {
+    mapping   = proxmox_hardware_mapping_dir.llm_models_mapping.name
+    cache     = "always"
+    direct_io = true
   }
 
   network_device {
