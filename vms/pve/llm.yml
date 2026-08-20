@@ -2,16 +2,23 @@
 - name: Configure LLM VM
   hosts: llm
   become: true
+  gather_facts: false
 
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
         timeout: 600
+        delay: 10
+        sleep: 5
 
-    - name: Wait for cloud-init apt to finish
-      ansible.builtin.shell: |
-        while fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do sleep 5; done
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
       changed_when: false
+      timeout: 600
+
+    - name: Gather facts
+      ansible.builtin.setup:
 
     - name: Create apt keyrings directory
       ansible.builtin.file:

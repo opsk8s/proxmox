@@ -19,6 +19,14 @@ resource "proxmox_virtual_environment_file" "llm_config" {
     packages:
       - qemu-guest-agent
       - openssh-server
+    write_files:
+      - path: /etc/environment
+        append: true
+        content: |
+          HF_TOKEN="${var.hf_token}"
+    runcmd:
+      - systemctl enable --now qemu-guest-agent
+      - systemctl enable --now ssh
     EOF
 
     file_name = "llm-config.yaml"
@@ -118,6 +126,10 @@ resource "null_resource" "configure_llm" {
   provisioner "local-exec" {
     command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/llm.yml"
   }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.llm_vm
+  ]
 }
 
 # vm jenkins

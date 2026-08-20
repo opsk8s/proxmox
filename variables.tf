@@ -12,3 +12,7 @@ variable "vm_dir" {
   type = string
   default = "local-lvm"
 }
+
+variable "hf_token" {
+  type = string
+}
