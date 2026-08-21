@@ -109,18 +109,18 @@ usage() {
     echo ""
     echo "  # QUANT (4th arg) selects the model: Q4 | Q6 | Q8 | BF16"
     echo "  # Run Q8 (Q8_K_XL model, q8_0 KV cache) on devices 2,3 / 0,1"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision -np 1"
     echo "  # Run Q6 (Q6_K_XL model, q8_0 KV cache) on devices 2,3 / 0,1"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q6 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q6 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo "  # Run Q4 (Q4_K_XL model, q4_0 KV cache) on a single device at ports 8001-8004"
-    echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
-    echo "  $0 vulkan 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
     echo ""
     exit 1
 }
@@ -248,7 +248,7 @@ elif [[ "$MTP" == "dspark-vision" ]]; then
       --spec-type draft-dspark
       --spec-draft-n-max 7
     )
-elif [[ "$MTP" == "dflash" ]] then
+elif [[ "$MTP" == "dflash" ]]; then
     LLAMA_CMD+=(
       --model-draft "$DFLASH_FILE"
       --cache-type-k-draft "$KV_CACHE_TYPE"
@@ -266,7 +266,7 @@ elif [[ "$MTP" == "dflash-vision" ]]; then
       --spec-type draft-dflash
       --spec-draft-n-max 7
     )
-elif [[ "$MTP" == "vision" ]] then
+elif [[ "$MTP" == "vision" ]]; then
     LLAMA_CMD+=(
        --mmproj "$MMPROJ_FILE"
        --image-min-tokens 1024
