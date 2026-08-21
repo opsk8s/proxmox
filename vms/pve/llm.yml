@@ -424,13 +424,12 @@
         name: nginx
         state: started
         enabled: true
-      notify: reload nginx
+
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
 
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
-
-    - name: reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded

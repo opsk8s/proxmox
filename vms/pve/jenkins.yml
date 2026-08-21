@@ -91,3 +91,32 @@
       until: jenkins_check.status == 200
       retries: 12
       delay: 5
+
+    - name: Create .ssh directory for jenkins user
+      ansible.builtin.file:
+        path: /home/jenkins/.ssh
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "0700"
+
+    - name: Deploy agent SSH private key to controller
+      ansible.builtin.copy:
+        src: /Users/ffhs/.ssh/jenkins-agent
+        dest: /home/jenkins/.ssh/jenkins-agent
+        owner: jenkins
+        group: jenkins
+        mode: "0600"
+
+    - name: Create SSH config for jenkins user
+      ansible.builtin.copy:
+        dest: /home/jenkins/.ssh/config
+        owner: jenkins
+        group: jenkins
+        mode: "0600"
+        content: |
+          Host jenkins-agent
+              HostName 192.168.51.203
+              User jenkins
+              IdentityFile /home/jenkins/.ssh/jenkins-agent
+              StrictHostKeyChecking accept-new
