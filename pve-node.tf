@@ -192,3 +192,79 @@ resource "null_resource" "configure_jenkins" {
     proxmox_virtual_environment_vm.jenkins_vm
   ]
 }
+
+# jenkins agent vm
+resource "proxmox_virtual_environment_file" "jenkins_agent_config" {
+  content_type = "snippets"
+  datastore_id = var.backup_dir
+  node_name    = var.main_node
+
+  source_raw {
+    data = templatefile("${path.module}/vms/cloud-init/jenkins-agent-config.yaml", {
+      jenkins_public_key = trimspace(data.local_file.jenkins_agent_key.content)
+    })
+    file_name = "jenkins-agent-config.yaml"
+  }
+}
+
+resource "proxmox_virtual_environment_vm" "jenkins_agent_vm" {
+  name            = "jenkins-agent"
+  node_name       = var.main_node
+  vm_id           = 102
+  tags            = ["ubuntu", "jenkins", "agents"]
+  stop_on_destroy = true
+
+  initialization {
+    ip_config {
+      ipv4 {
+        address = "192.168.51.203/24"
+        gateway = "192.168.51.1"
+      }
+    }
+
+    user_data_file_id = proxmox_virtual_environment_file.jenkins_agent_config.id
+  }
+
+  cpu {
+    sockets = 1
+    cores   = 8
+  }
+
+  memory {
+    dedicated = 8192
+  }
+
+  disk {
+    datastore_id = var.vm_dir
+    file_id      = proxmox_download_file.ubuntu_cloud_image.id
+    interface    = "virtio0"
+    size         = 50
+    backup       = true
+  }
+
+  network_device {
+    bridge = "vmbr0"
+  }
+  keyboard_layout = "de-ch"
+
+  depends_on = [
+    proxmox_virtual_environment_file.jenkins_agent_config,
+    proxmox_download_file.ubuntu_cloud_image,
+    proxmox_download_file.fedora_cloud_image
+  ]
+}
+
+resource "null_resource" "configure_jenkins_agent" {
+  triggers = {
+    vm_id    = proxmox_virtual_environment_vm.jenkins_agent_vm.id
+    playbook = filesha256("${path.module}/vms/pve/jenkins-agent.yml")
+  }
+
+  provisioner "local-exec" {
+    command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins-agent.yml"
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.jenkins_agent_vm
+  ]
+}

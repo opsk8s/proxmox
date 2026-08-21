@@ -20,3 +20,6 @@ data "local_file" "public_key" {
   filename = "/Users/ffhs/.ssh/proxmox-ubuntu.pub"
 }
 
+data "local_file" "jenkins_agent_key" {
+  filename = "/Users/ffhs/.ssh/jenkins-agent.pub"
+}
