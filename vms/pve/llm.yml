@@ -135,7 +135,7 @@
 
     - name: Push my scripts (this is your "upload" mechanism)
       ansible.builtin.copy:
-        src: scripts/
+        src: llm-scripts/
         dest: /home/llm/scripts/
         owner: llm
         group: llm

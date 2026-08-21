@@ -40,7 +40,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   }
 
   memory {
-    dedicated = 16384
+    dedicated = 65536
   }
 
   disk {
@@ -175,5 +175,20 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
     proxmox_virtual_environment_file.jenkins_config,
     proxmox_download_file.ubuntu_cloud_image,
     proxmox_download_file.fedora_cloud_image
+  ]
+}
+
+resource "null_resource" "configure_jenkins" {
+  triggers = {
+    vm_id    = proxmox_virtual_environment_vm.jenkins_vm.id
+    playbook = filesha256("${path.module}/vms/pve/jenkins.yml")
+  }
+
+  provisioner "local-exec" {
+    command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins.yml"
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.jenkins_vm
   ]
 }
