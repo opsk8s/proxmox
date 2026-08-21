@@ -1,0 +1,41 @@
+#cloud-config
+hostname: llm-ubuntu
+timezone: Europe/Zurich
+users:
+  - name: llm
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${llm_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server
+  - xfsprogs  # Recommended for formatting, or use e2fsprogs for ext4
+
+# 1. Format the disk if it doesn't have a filesystem yet
+bootcmd:
+  - |
+    # Check if /dev/vdb has a filesystem, if not, create one (XFS is great for large files/models)
+    if ! blkid /dev/vdb > /dev/null 2>&1; then
+      echo "Formatting /dev/vdb with XFS..."
+      mkfs.xfs /dev/vdb
+    fi
+
+# 2. Define the mount points
+mounts:
+  - [ /dev/vdb, /mnt/models, "xfs", "defaults,noatime", "0", "2" ]
+
+# 3. Ensure the mount point directory exists and has correct permissions
+runcmd:
+  - systemctl enable --now qemu-guest-agent
+  - systemctl enable --now ssh
+  - mkdir -p /mnt/models
+  - chown llm:llm /mnt/models
+  - chmod 775 /mnt/models
+
+write_files:
+  - path: /etc/environment
+    append: true
+    content: |
+      HF_TOKEN="${hf_token}"

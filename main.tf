@@ -16,7 +16,7 @@ output "data_proxmox_version" {
   }
 }
 
-data "local_file" "llm_public_key" {
+data "local_file" "public_key" {
   filename = "/Users/ffhs/.ssh/proxmox-ubuntu.pub"
 }
 

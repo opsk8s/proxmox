@@ -5,34 +5,13 @@ resource "proxmox_virtual_environment_file" "llm_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = <<-EOF
-    #cloud-config
-    hostname: llm-ubuntu
-    timezone: Europe/Zurich
-    users:
-      - name: llm
-        groups: [sudo]
-        shell: /bin/bash
-        ssh_authorized_keys:
-          - ${trimspace(data.local_file.llm_public_key.content)}
-        sudo: ALL=(ALL) NOPASSWD:ALL
-    packages:
-      - qemu-guest-agent
-      - openssh-server
-    write_files:
-      - path: /etc/environment
-        append: true
-        content: |
-          HF_TOKEN="${var.hf_token}"
-    runcmd:
-      - systemctl enable --now qemu-guest-agent
-      - systemctl enable --now ssh
-    EOF
-
+    data = templatefile("${path.module}/vms/cloud-init/llm-config.yaml", {
+      llm_public_key = trimspace(data.local_file.public_key.content)
+      hf_token       = var.hf_token
+    })
     file_name = "llm-config.yaml"
   }
 }
-
 
 resource "proxmox_virtual_environment_vm" "llm_vm" {
   name            = "llm-ubuntu"
@@ -72,10 +51,13 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     backup       = true
   }
 
-  virtiofs {
-    mapping   = proxmox_hardware_mapping_dir.llm_models_mapping.name
-    cache     = "always"
-    direct_io = true
+  # Second disk (additional storage)
+  disk {
+    datastore_id = var.os_ssd_fast  # or use a different datastore
+    interface    = "virtio1"
+    size         = 200          # size in GB
+    backup       = true
+    # file_format = "raw"      # optional: specify format (raw, qcow2)
   }
 
   network_device {
@@ -132,33 +114,19 @@ resource "null_resource" "configure_llm" {
   ]
 }
 
-# vm jenkins
+# jenkins vm
 resource "proxmox_virtual_environment_file" "jenkins_config" {
   content_type = "snippets"
   datastore_id = var.backup_dir
   node_name    = var.main_node
 
   source_raw {
-    data = <<-EOF
-    #cloud-config
-    hostname: jenkins-ubuntu
-    timezone: Europe/Zurich
-    users:
-      - name: jenkins
-        groups: [sudo]
-        shell: /bin/bash
-        ssh_authorized_keys:
-          - ${trimspace(data.local_file.llm_public_key.content)}
-        sudo: ALL=(ALL) NOPASSWD:ALL
-    packages:
-      - qemu-guest-agent
-      - openssh-server
-    EOF
-
+    data = templatefile("${path.module}/vms/cloud-init/jenkins-config.yaml", {
+      jenkins_public_key = trimspace(data.local_file.public_key.content)
+    })
     file_name = "jenkins-config.yaml"
   }
 }
-
 
 resource "proxmox_virtual_environment_vm" "jenkins_vm" {
   name            = "jenkins-ubuntu"
@@ -196,12 +164,6 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
     interface    = "virtio0"
     size         = 40
     backup       = true
-  }
-
-  virtiofs {
-    mapping   = proxmox_hardware_mapping_dir.git_storage_mapping.id
-    cache     = "always"
-    direct_io = true
   }
 
   network_device {

@@ -7,7 +7,7 @@
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
-        timeout: 600
+        timeout: 300
         delay: 10
         sleep: 5
 
@@ -15,7 +15,7 @@
       ansible.builtin.command:
         cmd: cloud-init status --wait
       changed_when: false
-      timeout: 600
+      timeout: 300
 
     - name: Gather facts
       ansible.builtin.setup:
@@ -126,16 +126,6 @@
           KERNEL=="kfd", GROUP="render", MODE="0666"
           SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"
       notify: reload udev
-
-    - name: Mount virtiofs shares persistently
-      ansible.builtin.mount:
-        path: "{{ item.path }}"
-        src: "{{ item.src }}"
-        fstype: virtiofs
-        opts: defaults,_netdev
-        state: mounted
-      loop:
-        - { src: llm-models, path: /mnt/models }
 
     - name: Grant llm user read-write access to the mount point
       ansible.builtin.file:
