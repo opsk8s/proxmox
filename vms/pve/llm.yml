@@ -281,9 +281,6 @@
 
     - name: Download Qwen3.8 Q8 model via wget
       ansible.builtin.shell: |
-        # Ensure target directory exists
-        mkdir -p /mnt/models
-        
         # Define the direct URL for the specific GGUF file
         MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
         OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
@@ -296,6 +293,40 @@
         executable: /bin/bash
         # Idempotency: Only run if the file does NOT exist
         creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+      become: true
+      become_user: llm
+
+    - name: Download Qwen3.8 Q4 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q4_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q4_K_XL.gguf
+      become: true
+      become_user: llm
+
+    - name: Download Qwen3.8 Q6 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
       become: true
       become_user: llm
 

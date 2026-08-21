@@ -11,13 +11,21 @@ API=${1:-"rocm"}
 PORT=${2:-8001}
 CONTEXT_SIZE=${3:-262144}
 DEVICE_ID=${4:-0,1,2,3}
-KV_CACHE_TYPE=${5:-"q8_0"}
-MODEL_NAME=${6:-"Qwen3.8-27B"}
-MODEL_QUANT=${7:-"Q8_K_XL"}
-TEMPERATURE=${8:-"thinking"}
-MTP=${9:-"mtp-vision"}
-EXTRA_ARGS=("${@:10}")
+MODEL_NAME=${5:-"Qwen3.8-27B"}
+QUANT=${6:-"Q8"}
+TEMPERATURE=${7:-"thinking"}
+MTP=${8:-"mtp-vision"}
+EXTRA_ARGS=("${@:9}")
 SPLIT_MODE="layer"
+
+# Derive MODEL_QUANT and KV_CACHE_TYPE from the QUANT selector
+case "$QUANT" in
+    Q4)   MODEL_QUANT="Q4_K_XL"; KV_CACHE_TYPE="q4_0" ;;
+    Q6)   MODEL_QUANT="Q6_K_XL"; KV_CACHE_TYPE="q8_0" ;;
+    Q8)   MODEL_QUANT="Q8_K_XL"; KV_CACHE_TYPE="q8_0" ;;
+    BF16) MODEL_QUANT="BF16";    KV_CACHE_TYPE="f16"  ;;
+    *)    echo "❌ Error: invalid QUANT '$QUANT' (expected Q4, Q6, Q8, or BF16)"; exit 1 ;;
+esac
 
 MODELS_HOME="/mnt/models"
 LLAMA_BIN="$HOME/llama.cpp/build-${API}/bin/llama-server"
@@ -82,16 +90,15 @@ generate_rocm_devices() {
 }
 
 usage() {
-    echo "Usage: $0 [PORT] [CONTEXT_SIZE] [DEVICE_ID] [KV_CACHE_TYPE] [MODEL_SIZE] [MODEL_QUANT]"
+    echo "Usage: $0 [API] [PORT] [CONTEXT_SIZE] [QUANT] [DEVICE_ID] [MODEL_NAME] [TEMPERATURE] [MTP] [EXTRA_ARGS...]"
     echo ""
     echo "Arguments:"
     echo "  API           : Api of server rocm or vulkan (default: rocm)"
     echo "  PORT          : Port to run the server on (default: 8001)"
     echo "  CONTEXT_SIZE  : Context size in tokens (default: 262144)"
+    echo "  QUANT         : Model quant to load: Q4, Q6, Q8, or BF16 (default: Q8)"
     echo "  DEVICE_ID     : ROCm Device ID(s) to use, e.g., '0' or '0,1' (default: 0,1,2,3)"
-    echo "  KV_CACHE_TYPE : KV Cache quantization type, e.g., 'q8_0' or 'q4_0' (default: q8_0)"
     echo "  MODEL_NAME    : Name of model, e.g., (default: Qwen3.8-27B-UD)"
-    echo "  MODEL_QUANT   : Quant of model, e.g., 'Q4_K_XL' or 'Q6_K_XL' (default: Q8_K_XL)"
     echo "  SPLIT_MODE    : Split mode of model, e.g., 'row' or 'tensor' (default: layer)"
     echo "  TEMPERATURE   : Temperatore of model, e.g., 'thinking', 'instruct' (default: thinking)"
     echo "  MODE           : Only mtp supported models, e.g., 'mtp', 'mtp-vision',  'dspark', 'dspark-vision', 'dflash', 'dflash-vision', 'vision' (default: none)"
@@ -100,11 +107,20 @@ usage() {
     echo "  # Run default rocm Qwen3.8-27B-UD Q8_K_XL on devices 0,1,2,3 at port 8001"
     echo "  $0"
     echo ""
-    echo "  # Run models on a single device (0) at port 8001 with 128k context"
-    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
+    echo "  # QUANT (4th arg) selects the model: Q4 | Q6 | Q8 | BF16"
+    echo "  # Run Q8 (Q8_K_XL model, q8_0 KV cache) on devices 2,3 / 0,1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q8 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  # Run Q6 (Q6_K_XL model, q8_0 KV cache) on devices 2,3 / 0,1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q6 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q6 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  # Run Q4 (Q4_K_XL model, q4_0 KV cache) on a single device at ports 8001-8004"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
+    echo "  $0 vulkan 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision --reasoning-effort medium -np 1"
     echo ""
     exit 1
 }
@@ -294,6 +310,7 @@ LLAMA_CMD+=(
     --cache-type-v "$KV_CACHE_TYPE"
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
+    --load-mode none
 )
 
 # disabled ram offloading
