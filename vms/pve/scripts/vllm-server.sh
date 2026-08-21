@@ -12,8 +12,8 @@ export HSA_OVERRIDE_GFX_VERSION=12.0.1
 
 export VLLM_ROCM_USE_AITER=1
 # export VLLM_USE_FLASHINFER_MOE_FP8=1
-# export VLLM_USE_FLASHINFER_MOE_FP4=1
-# export VLLM_USE_FLASHINFER_MOE_MXFP4_BF16=1
+# export VLLM_USE_FLASHINFER_MOE_FP4=1
+# export VLLM_USE_FLASHINFER_MOE_MXFP4_BF16=1
 # export VLLM_ROCM_USE_AITER_MOE=1
 
 export HIP_FORCE_DEV_KERNARG=1
@@ -28,7 +28,7 @@ export NCCL_MIN_NCHANNELS=112
 # export LLM_ROCM_USE_AITER=1
 export FLASH_ATTENTION_TRITON_AMD_ENABLE="TRUE"
 
-# export RCCL_DEBUG=INFO
+# export RCCL_DEBUG=INFO
 # export RCCL_DEBUG_SUBSYS=INIT,GRAPH
 
 # Set logging to INFO (DEBUG is too noisy, removes the harmless spam)
@@ -58,6 +58,6 @@ vllm serve "$MODEL" \
     --reasoning-parser qwen3 \
     --host 0.0.0.0 \
     --port 8001 "${EXTRA_ARGS[@]}"
-    # --speculative-config '{"model":"poolside/Laguna-S-2.1-DFlash-INT4","num_speculative_tokens":15,"method":"dflash"}' \
-    # --host 0.0.0.0 \
-    # --port 8001 "${EXTRA_ARGS[@]}"
+    # --speculative-config '{"model":"poolside/Laguna-S-2.1-DFlash-INT4","num_speculative_tokens":15,"method":"dflash"}' \
+    # --host 0.0.0.0 \
+    # --port 8001 "${EXTRA_ARGS[@]}"

@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # ==============================================================================
 # Configuration & Defaults
 # ==============================================================================
@@ -10,19 +12,22 @@ PORT=${2:-8001}
 CONTEXT_SIZE=${3:-262144}
 DEVICE_ID=${4:-0,1,2,3}
 KV_CACHE_TYPE=${5:-"q8_0"}
-MODEL_NAME=${6:-"Qwen3.8-27B-UD"}
+MODEL_NAME=${6:-"Qwen3.8-27B"}
 MODEL_QUANT=${7:-"Q8_K_XL"}
 TEMPERATURE=${8:-"thinking"}
 MTP=${9:-"mtp-vision"}
 EXTRA_ARGS=("${@:10}")
-MMPROJ_QUANT="BF16"
 SPLIT_MODE="layer"
 
 MODELS_HOME="/mnt/models"
 LLAMA_BIN="$HOME/llama.cpp/build-${API}/bin/llama-server"
-# Derived variables
-MODEL_FILE="$MODELS_HOME/${MODEL_NAME}-${MODEL_QUANT}.gguf"
-MMPROJ_FILE="$MODELS_HOME/${MODEL_NAME}-mmproj-${MMPROJ_QUANT}.gguf"
+# File discovery: globs tolerate tags (e.g. -UD) between model name and quant/mmproj
+shopt -s nullglob
+MODEL_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-${MODEL_QUANT}.gguf )
+MMPROJ_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-mmproj*.gguf )
+shopt -u nullglob
+MODEL_FILE="${MODEL_MATCHES[0]:-}"
+MMPROJ_FILE="${MMPROJ_MATCHES[0]:-}"
 LOG_FILE="$HOME/logs/llama_server_port_${PORT}.log"
 PID_FILE="$HOME/logs/llama_server_port_${PORT}.pid"
 
@@ -82,11 +87,11 @@ usage() {
     echo "Arguments:"
     echo "  API           : Api of server rocm or vulkan (default: rocm)"
     echo "  PORT          : Port to run the server on (default: 8001)"
-    echo "  CONTEXT_SIZE  : Context size in tokens (default: 131072)"
-    echo "  DEVICE_ID     : ROCm Device ID(s) to use, e.g., '0' or '0,1' (default: 0,1)"
+    echo "  CONTEXT_SIZE  : Context size in tokens (default: 262144)"
+    echo "  DEVICE_ID     : ROCm Device ID(s) to use, e.g., '0' or '0,1' (default: 0,1,2,3)"
     echo "  KV_CACHE_TYPE : KV Cache quantization type, e.g., 'q8_0' or 'q4_0' (default: q8_0)"
-    echo "  MODEL_NAME    : Name of model, e.g., 'Qwen3.6-27B' or 'Qwen3.6-35B-A3B' (default: Qwen3.6-27B)"
-    echo "  MODEL_QUANT   : Quant of model, e.g., 'UD-Q4_K_XL' or 'UD-Q6_K_XL' (default: UD-Q8_K_XL)"
+    echo "  MODEL_NAME    : Name of model, e.g., (default: Qwen3.8-27B-UD)"
+    echo "  MODEL_QUANT   : Quant of model, e.g., 'Q4_K_XL' or 'Q6_K_XL' (default: Q8_K_XL)"
     echo "  SPLIT_MODE    : Split mode of model, e.g., 'row' or 'tensor' (default: layer)"
     echo "  TEMPERATURE   : Temperatore of model, e.g., 'thinking', 'instruct' (default: thinking)"
     echo "  MODE           : Only mtp supported models, e.g., 'mtp', 'mtp-vision',  'dspark', 'dspark-vision', 'dflash', 'dflash-vision', 'vision' (default: none)"
@@ -96,8 +101,10 @@ usage() {
     echo "  $0"
     echo ""
     echo "  # Run models on a single device (0) at port 8001 with 128k context"
-    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B-UD Q8_K_XL layer thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B-UD Q8_K_XL layer thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B Q8_K_XL thinking mtp-vision -np 1"
     echo ""
     exit 1
 }
@@ -117,6 +124,20 @@ if [ ! -f "$LLAMA_BIN" ]; then
     echo "   Please ensure you have built llama.cpp with Vulkan support."
     exit 1
 fi
+
+if [[ -z "$MODEL_FILE" ]]; then
+    echo "❌ Error: no model file matching '$MODELS_HOME/${MODEL_NAME}*-${MODEL_QUANT}.gguf'"
+    exit 1
+fi
+
+case "$MTP" in
+    mtp-vision|dspark-vision|dflash-vision|vision)
+        if [[ -z "$MMPROJ_FILE" ]]; then
+            echo "❌ Error: no mmproj file matching '$MODELS_HOME/${MODEL_NAME}*-mmproj*.gguf' (required for '$MTP' mode)"
+            exit 1
+        fi
+        ;;
+esac
 
 # Check if already running
 if [ -f "$PID_FILE" ]; then
@@ -149,6 +170,8 @@ if [[ "$API" == "rocm" ]]; then
         HSA_OVERRIDE_GFX_VERSION=12.0.1
         GGML_VK_DISABLE=1
         HIP_VISIBLE_DEVICES="$DEVICE_ID"
+        "$LLAMA_BIN"
+        --device "$ROCM_DEVICES"
     )
 elif [[ "$API" == "vulkan" ]]; then
     ROCM_DEVICES=$(generate_vulkan_devices "$DEVICE_ID")
@@ -160,12 +183,13 @@ elif [[ "$API" == "vulkan" ]]; then
         DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
         HSA_OVERRIDE_GFX_VERSION=1201
         MALLOC_TRIM_THRESHOLD_=-1
+        "$LLAMA_BIN"
+        --device "$ROCM_DEVICES"
     )
 fi
 
 
 LLAMA_CMD+=(
-    "$LLAMA_BIN"
     --model "${MODEL_FILE}"
     --alias "${MODEL_NAME}"
 )
@@ -190,7 +214,7 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --spec-type draft-mtp
       --spec-draft-n-max 4
     )
-elif [[ "$MTP" == "dspark" ]] then
+elif [[ "$MTP" == "dspark" ]]; then
     LLAMA_CMD+=(
       --model-draft "$DFLASH_FILE"
       --cache-type-k-draft "$KV_CACHE_TYPE"
