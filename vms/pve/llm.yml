@@ -3,7 +3,6 @@
   hosts: llm
   become: true
   gather_facts: false
-
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -260,18 +259,63 @@
       become: true
       become_user: llm
 
-    - name: Build vllm using python 3.14
-      ansible.builtin.shell: |
-        # Explicitly load the ROCm environment variables we added earlier
-        source /home/llm/.bashrc
+#    - name: Build vllm using python 3.14
+#      ansible.builtin.shell: |
+#        # Explicitly load the ROCm environment variables we added earlier
+#        source /home/llm/.bashrc
+#
+#        # Execute the build script
+#        /home/llm/scripts/build-vllm.sh
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Skip this task if the final compiled binary already exists.
+#        # (Adjust this path if your script outputs the binary somewhere else)
+#        creates: /home/llm/.vllm/bin/activate
+#      become: true
+#      become_user: llm
 
-        # Execute the build script
-        /home/llm/scripts/build-vllm.sh
+    - name: Read HF_TOKEN from VM's environment file
+      ansible.builtin.shell: grep HF_TOKEN /etc/environment | cut -d'=' -f2 | tr -d '"'
+      register: hf_token_result
+      changed_when: false
+
+    - name: Download Qwen3.8 Q8 model via wget
+      ansible.builtin.shell: |
+        # Ensure target directory exists
+        mkdir -p /mnt/models
+        
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+        
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
       args:
         executable: /bin/bash
-        # Idempotency: Skip this task if the final compiled binary already exists.
-        # (Adjust this path if your script outputs the binary somewhere else)
-        creates: /home/llm/.vllm/bin/activate
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+      become: true
+      become_user: llm
+
+    - name: Download Qwen3.8 Vision model via wget
+      ansible.builtin.shell: |
+        # Ensure target directory exists
+        mkdir -p /mnt/models
+
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/mmproj-BF16.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-mmproj-BF16.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-mmproj-BF16.gguf
       become: true
       become_user: llm
 

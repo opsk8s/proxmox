@@ -9,28 +9,27 @@ API=${1:-"rocm"}
 PORT=${2:-8001}
 CONTEXT_SIZE=${3:-262144}
 DEVICE_ID=${4:-0,1,2,3}
-KV_CACHE_TYPE=${5:-BF16}
-MODEL_NAME=${6:-"Qwen3.8-27B"}
-MODEL_QUANT=${7:-"BF16"}
-SPLIT_MODE=${8:-"layer"}
-TEMPERATURE=${9:-"thinking"}
-MTP=${10:-"vision"}
-EXTRA_ARGS=("${@:11}")
+KV_CACHE_TYPE=${5:-"q8_0"}
+MODEL_NAME=${6:-"Qwen3.8-27B-UD"}
+MODEL_QUANT=${7:-"Q8_K_XL"}
+TEMPERATURE=${8:-"thinking"}
+MTP=${9:-"mtp-vision"}
+EXTRA_ARGS=("${@:10}")
 MMPROJ_QUANT="BF16"
+SPLIT_MODE="layer"
 
-MODELS_HOME="/mount/llm-models/models"
+MODELS_HOME="/mnt/models"
 LLAMA_BIN="$HOME/llama.cpp/build-${API}/bin/llama-server"
 # Derived variables
-MODEL_REPO="$MODELS_HOME/$MODEL_QUANT"
-MMPROJ_FILE="$MODELS_HOME/mmproj/${MODEL_NAME}-mmproj-${MMPROJ_QUANT}.gguf"
-DFLASH_FILE="$MODELS_HOME/dflash/${MODEL_NAME}-${MODEL_QUANT}.gguf"
+MODEL_FILE="$MODELS_HOME/${MODEL_NAME}-${MODEL_QUANT}.gguf"
+MMPROJ_FILE="$MODELS_HOME/${MODEL_NAME}-mmproj-${MMPROJ_QUANT}.gguf"
 LOG_FILE="$HOME/logs/llama_server_port_${PORT}.log"
 PID_FILE="$HOME/logs/llama_server_port_${PORT}.pid"
 
 # ==============================================================================
 # Helper Functions
 # ==============================================================================
-generate_vulcan_devices() {
+generate_vulkan_devices() {
     # Takes physical device IDs (e.g. "0,2" or "0,1,3")
     # and returns VulkanX list with the **same** IDs
     # Example: generate_devices "0,1,3" → "Vulkan0,Vulkan1,Vulkan3"
@@ -81,7 +80,7 @@ usage() {
     echo "Usage: $0 [PORT] [CONTEXT_SIZE] [DEVICE_ID] [KV_CACHE_TYPE] [MODEL_SIZE] [MODEL_QUANT]"
     echo ""
     echo "Arguments:"
-    echo "  API           : Api of server rocm or vulcan (default: rocm)"
+    echo "  API           : Api of server rocm or vulkan (default: rocm)"
     echo "  PORT          : Port to run the server on (default: 8001)"
     echo "  CONTEXT_SIZE  : Context size in tokens (default: 131072)"
     echo "  DEVICE_ID     : ROCm Device ID(s) to use, e.g., '0' or '0,1' (default: 0,1)"
@@ -89,21 +88,16 @@ usage() {
     echo "  MODEL_NAME    : Name of model, e.g., 'Qwen3.6-27B' or 'Qwen3.6-35B-A3B' (default: Qwen3.6-27B)"
     echo "  MODEL_QUANT   : Quant of model, e.g., 'UD-Q4_K_XL' or 'UD-Q6_K_XL' (default: UD-Q8_K_XL)"
     echo "  SPLIT_MODE    : Split mode of model, e.g., 'row' or 'tensor' (default: layer)"
-    echo "  TEMPERATURE   : Temperatore of model, e.g., 'general', 'coding', 'instruct-general', 'instruct-reasoning' (default: general)"
-    echo "  MODE           : Only mtp supported models, e.g., 'mtp3', 'mtp2', 'dflash', 'mtp3-vision', 'mtp2-vision', 'dflash-vision', 'vision' (default: none)"
+    echo "  TEMPERATURE   : Temperatore of model, e.g., 'thinking', 'instruct' (default: thinking)"
+    echo "  MODE           : Only mtp supported models, e.g., 'mtp', 'mtp-vision',  'dspark', 'dspark-vision', 'dflash', 'dflash-vision', 'vision' (default: none)"
     echo ""
     echo "Examples:"
-    echo "  # Run default rocm Qwen3.6-27B UD-Q8_K_XL on devices 0,1,2,3 at port 8001"
+    echo "  # Run default rocm Qwen3.8-27B-UD Q8_K_XL on devices 0,1,2,3 at port 8001"
     echo "  $0"
     echo ""
     echo "  # Run models on a single device (0) at port 8001 with 128k context"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.6-27B UD-Q6_K_XL layer coding mtp3 --cache-reuse 512"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 2,3 q8_0 Qwen3.6-27B UD-Q6_K_XL layer coding mtp3 --cache-reuse 512"
-    echo "  $0 rocm 8003 $CONTEXT_SIZE 0,1,2,3 q8_0 Qwen3.6-27B UD-Q8_K_XL layer coding mtp3 --cache-reuse 512"
-    echo ""
-    echo "  # Run 35B-A3B Q8 on two devices only, with 128k context"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 0,1 $KV_CACHE_TYPE $MODEL_NAME $MODEL_QUANT layer coding"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 2,3 $KV_CACHE_TYPE $MODEL_NAME $MODEL_QUANT layer coding"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 2,3 q8_0 Qwen3.8-27B-UD Q8_K_XL layer thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 0,1 q8_0 Qwen3.8-27B-UD Q8_K_XL layer thinking mtp-vision -np 1"
     echo ""
     exit 1
 }
@@ -156,13 +150,13 @@ if [[ "$API" == "rocm" ]]; then
         GGML_VK_DISABLE=1
         HIP_VISIBLE_DEVICES="$DEVICE_ID"
     )
-elif [[ "$API" == "vulcan" ]]; then
-    ROCM_DEVICES=$(generate_vulcan_devices "$DEVICE_ID")
+elif [[ "$API" == "vulkan" ]]; then
+    ROCM_DEVICES=$(generate_vulkan_devices "$DEVICE_ID")
     LLAMA_CMD+=(
         env
         RADV_PERFTERMS="compute"
         RADV_DEBUG="nocng,nodcc"
-	RADV_PERFTEST="nogttspill"
+	      RADV_PERFTEST="nogttspill"
         DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
         HSA_OVERRIDE_GFX_VERSION=1201
         MALLOC_TRIM_THRESHOLD_=-1
@@ -172,7 +166,7 @@ fi
 
 LLAMA_CMD+=(
     "$LLAMA_BIN"
-    --model "${MODEL_REPO}/${MODEL_NAME}-${MODEL_QUANT}.gguf"
+    --model "${MODEL_FILE}"
     --alias "${MODEL_NAME}"
 )
 
@@ -187,7 +181,7 @@ if [[ "$MTP" == "mtp" ]]; then
       --spec-type draft-mtp
       --spec-draft-n-max 4
     )
-elif [[ "$MTP" == "mtp-vision" &&  -f "$MMPROJ_FILE" ]]; then
+elif [[ "$MTP" == "mtp-vision" ]]; then
     LLAMA_CMD+=(
       --mmproj "$MMPROJ_FILE"
       --image-min-tokens 1024
@@ -204,7 +198,7 @@ elif [[ "$MTP" == "dspark" ]] then
       --spec-type draft-dspark
       --spec-draft-n-max 15
     )
-elif [[ "$MTP" == "dspark-vision" &&  -f "$MMPROJ_FILE" ]]; then
+elif [[ "$MTP" == "dspark-vision" ]]; then
     LLAMA_CMD+=(
       --mmproj "$MMPROJ_FILE"
       --image-min-tokens 1024
@@ -222,7 +216,7 @@ elif [[ "$MTP" == "dflash" ]] then
       --spec-type draft-dflash
       --spec-draft-n-max 7
     )
-elif [[ "$MTP" == "dflash-vision" &&  -f "$MMPROJ_FILE" ]]; then
+elif [[ "$MTP" == "dflash-vision" ]]; then
     LLAMA_CMD+=(
       --mmproj "$MMPROJ_FILE"
       --image-min-tokens 1024
@@ -236,11 +230,6 @@ elif [[ "$MTP" == "vision" ]] then
     LLAMA_CMD+=(
        --mmproj "$MMPROJ_FILE"
        --image-min-tokens 1024
-    )
-elif [[ "$MTP" == "no-caching" ]] then
-    LLAMA_CMD+=(
-        --cache-ram 0
-	--ctx-checkpoints 0
     )
 fi
 
@@ -283,16 +272,16 @@ LLAMA_CMD+=(
     --flash-attn auto
 )
 
-
 # disabled ram offloading
-# --cache-ram 32768
+# --cache-ram 0
+#	--ctx-checkpoints 0
+# --cache-ram 8192 -> default
 
 echo "🚀 Starting llama-server..."
 echo "   RAW_IDS      : $DEVICE_ID"
 echo "   ROCM_DEVICES : $ROCM_DEVICES"
-echo "   Mmproj file  : $MMPROJ_FILE"
-echo "   DFlash file  : $DFLASH_FILE"
-echo "   Model        : ${MODEL_REPO}/${MODEL_NAME}-${MODEL_QUANT}.gguf"
+echo "   Vision file  : $MMPROJ_FILE"
+echo "   Model        : $MODEL_FILE"
 echo "   Port         : $PORT"
 echo "   Device ID    : $DEVICE_ID -> $ROCM_DEVICES"
 echo "   Context      : ${CONTEXT_SIZE}"

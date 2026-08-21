@@ -1,5 +1,4 @@
 # build vllm
-source $HOME/.bashrc
 rm -fR $HOME/.vllm
 uv venv $HOME/.vllm --python 3.14 --seed
 
