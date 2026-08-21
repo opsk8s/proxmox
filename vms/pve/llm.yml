@@ -350,6 +350,87 @@
       become: true
       become_user: llm
 
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Remove default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Deploy LLM load balancer config
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/llm
+        mode: "0644"
+        content: |
+          upstream llama_servers {
+              least_conn;
+              server 127.0.0.1:8001 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8002 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
+              keepalive 16;
+          }
+
+          server {
+              listen 8000 default_server;
+              listen [::]:8000 default_server;
+              server_name _;
+
+              # LLM inference is long-running (seconds to minutes)
+              proxy_connect_timeout 60s;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+              send_timeout 3600s;
+
+              # Streaming support (SSE from llama-server)
+              proxy_buffering off;
+              proxy_cache off;
+
+              # Vision requests with base64 images can be large
+              client_max_body_size 100M;
+
+              location / {
+                  proxy_pass http://llama_servers;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+
+                  # Retry only on connection failures, NOT on read timeout
+                  # (a slow LLM generation is normal, not a proxy error)
+                  proxy_next_upstream error http_502 http_503;
+                  proxy_next_upstream_tries 2;
+              }
+          }
+
+    - name: Enable LLM load balancer site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/llm
+        dest: /etc/nginx/sites-enabled/llm
+        state: link
+
+    - name: Test nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Start and enable nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+      notify: reload nginx
+
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
+
+    - name: reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
