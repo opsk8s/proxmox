@@ -115,6 +115,10 @@ resource "null_resource" "configure_llm" {
 }
 
 # jenkins vm
+# WARNING: the PVE provider cannot update a cloud-init seed on an existing VM.
+# Changing the content of this snippet (e.g. the hostname) forces a FULL VM
+# recreation and wipes the disk. Set the hostname in the playbook (hostnamectl)
+# instead of here, and never edit this file after the VM is created.
 resource "proxmox_virtual_environment_file" "jenkins_config" {
   content_type = "snippets"
   datastore_id = var.backup_dir

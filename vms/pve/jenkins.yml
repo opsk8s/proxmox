@@ -293,6 +293,16 @@
              if (admin_user_dirs.files | default([]) | length) > 0
              else (jenkins_home ~ '/users/admin') }}
 
+    - name: Ensure admin user directory exists
+      # Jenkins creates user directories lazily; on an instance that never
+      # had an admin user the fallback directory does not exist yet
+      ansible.builtin.file:
+        path: "{{ admin_user_dir }}"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "0755"
+
     - name: Compute Jenkins password hash (jbcrypt)
       # 2.5xx MultiPasswordEncoder requires #jbcrypt:$2a$... (legacy {SHA-256} is rejected)
       ansible.builtin.command:
@@ -330,14 +340,16 @@
         group: jenkins
         mode: "0600"
         content: |
+          # the security realm is owned by the seeded config.xml (bootstrap),
+          # not re-declared here: core's local realm now has a 3-arg
+          # constructor and CAC would need the full data-bound form
           jenkins:
             numExecutors: 0
-            securityRealm:
-              hudsonPrivateSecurityRealm:
-                disableSignup: true
             authorizationStrategy:
               loggedInUsersCanDoAnything:
-                denyAnonymousReadAccess: true
+                # 2.x core renamed the data-bound property (inverted logic);
+                # denyAnonymousReadAccess is now an internal, non-CAC field
+                allowAnonymousRead: false
             nodes:
               - permanent:
                   name: jenkins-agent
@@ -366,9 +378,13 @@
                         id: jenkins-agent
                         username: jenkins
                         description: SSH key for jenkins-agent (192.168.51.203)
+                        # newer ssh-credentials (SECURITY-440) dropped the
+                        # fileOnMaster source from CAC; the key must be inlined
+                        # (form per the plugin's jcasc test: privateKeySource > directEntry)
                         privateKeySource:
-                          fileOnMaster:
-                            path: /home/jenkins/.ssh/jenkins-agent
+                          directEntry:
+                            privateKey: |
+          {{ lookup('file', '/Users/ffhs/.ssh/jenkins-agent') | trim | indent(20, first=True) }}
 
     - name: Start Jenkins
       ansible.builtin.systemd:
@@ -381,6 +397,9 @@
         url: "http://localhost:{{ jenkins_http_port }}/api/json?tree=jenkinsVersion"
         user: admin
         password: "{{ jenkins_admin_password }}"
+        # Jenkins answers 403 (not 401+challenge) to anonymous requests, so
+        # Basic auth must be sent proactively instead of in response to a challenge
+        force_basic_auth: true
         status_code: 200
       register: api_check
       until: api_check.status == 200
@@ -405,7 +424,9 @@
 
     - name: Install missing bootstrap plugins (crumb + cookie session via curl)
       # the CSRF crumb is bound to the session cookie, so the crumb fetch and the
-      # POST must share one curl cookie jar (the uri module cannot do that)
+      # POST must share one curl cookie jar (the uri module cannot do that);
+      # 2.5xx installPlugins requires the JSON body form (the legacy
+      # ?name=a,b,c form 500s: doInstallPlugins parses the body as JSON)
       ansible.builtin.shell: |
         set -euo pipefail
         CJ=$(mktemp)
@@ -415,7 +436,9 @@
           | python3 -c 'import json,sys; print(json.load(sys.stdin)["crumb"])')
         curl -fsS -m 900 -c "$CJ" -b "$CJ" -u "admin:$JENKINS_ADMIN_PASSWORD" \
           -H "Jenkins-Crumb: $CRUMB" \
-          -X POST "http://localhost:{{ jenkins_http_port }}/pluginManager/installPlugins?name={{ missing_plugins | join(',') }}"
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:{{ jenkins_http_port }}/pluginManager/installPlugins" \
+          -d '{"plugins":[{{ missing_plugins | map('to_json') | join(',') }}],"dynamicLoad":false}'
       environment:
         JENKINS_ADMIN_PASSWORD: "{{ jenkins_admin_password }}"
       when: missing_plugins | length > 0
@@ -444,6 +467,7 @@
         url: "http://localhost:{{ jenkins_http_port }}/api/json?tree=jenkinsVersion"
         user: admin
         password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
         status_code: 200
       register: back_up
       until: back_up.status == 200
@@ -459,6 +483,7 @@
         url: "http://localhost:{{ jenkins_http_port }}/computer/api/json?tree=computer%5Bname%5D"
         user: admin
         password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
         status_code: 200
       register: nodes
       until: "'jenkins-agent' in nodes.content"
@@ -471,6 +496,7 @@
         url: "http://localhost:{{ jenkins_http_port }}/computer/jenkins-agent/api/json?tree=offline"
         user: admin
         password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
         status_code: 200
       register: agent_state
       until: agent_state.json.offline == false

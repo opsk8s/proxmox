@@ -29,6 +29,5 @@ variable "hf_token" {
 
 variable "jenkins_admin_password" {
   type        = string
-  sensitive   = true
-  description = "Admin password seeded into the Jenkins controller on first boot (re-running the playbook resets it to this value)"
+  description = "Jenkins admin password"
 }
