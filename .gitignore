@@ -4,3 +4,4 @@ os/
 .state/
 .idea/
 *.tfvars
+/.qwen/

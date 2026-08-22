@@ -1,5 +1,5 @@
 #cloud-config
-hostname: jenkins-ubuntu
+hostname: jenkins-server
 timezone: Europe/Zurich
 users:
   - name: jenkins

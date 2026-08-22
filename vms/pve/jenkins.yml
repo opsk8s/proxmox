@@ -1,8 +1,131 @@
 ---
-- name: Configure Jenkins VM
+- name: Configure Jenkins controller VM (unattended bootstrap)
   hosts: jenkins
   become: true
   gather_facts: false
+  vars:
+    # terraform passes the value via local-exec environment
+    jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    jenkins_home: /var/lib/jenkins
+    jenkins_http_port: 8080
+    # Full set of plugins the controller is expected to run (captured from the
+    # running instance on 2026-08-22). A freshly recreated VM installs all of
+    # these at latest versions; on the existing instance only missing ones install.
+    # Re-capture after adding/removing plugins via the UI:
+    #   ls /var/lib/jenkins/plugins | sed 's/\.jp[ie]$//' | sort -u
+    bootstrap_plugins:
+      - analysis-model-api
+      - ant
+      - antisamy-markup-formatter
+      - apache-httpcomponents-client-4-api
+      - apache-httpcomponents-client-5-api
+      - asm-api
+      - bootstrap5-api
+      - bouncycastle-api
+      - branch-api
+      - build-name-setter
+      - build-timeout
+      - caffeine-api
+      - checks-api
+      - cloudbees-folder
+      - commons-lang3-api
+      - commons-text-api
+      - conditional-buildstep
+      - config-file-provider
+      - configuration-as-code
+      - copyartifact
+      - coverage
+      - credentials
+      - credentials-binding
+      - dark-theme
+      - dashboard-view
+      - data-tables-api
+      - display-url-api
+      - dtkit-api
+      - durable-task
+      - echarts-api
+      - eddsa-api
+      - email-ext
+      - embeddable-build-status
+      - font-awesome-api
+      - forensics-api
+      - git
+      - git-client
+      - github
+      - github-api
+      - github-branch-source
+      - gradle
+      - gson-api
+      - htmlpublisher
+      - instance-identity
+      - ionicons-api
+      - jackson-annotations2-api
+      - jackson2-api
+      - jackson3-api
+      - jakarta-activation-api
+      - jakarta-mail-api
+      - jakarta-xml-bind-api
+      - javax-activation-api
+      - jaxb
+      - jjwt-api
+      - joda-time-api
+      - jquery3-api
+      - json-api
+      - json-path-api
+      - jsoup
+      - junit
+      - ldap
+      - mailer
+      - matrix-auth
+      - matrix-project
+      - mina-sshd-api-common
+      - mina-sshd-api-core
+      - nodejs
+      - okhttp-api
+      - parameterized-trigger
+      - pipeline-build-step
+      - pipeline-github-lib
+      - pipeline-graph-view
+      - pipeline-groovy-lib
+      - pipeline-input-step
+      - pipeline-milestone-step
+      - pipeline-model-api
+      - pipeline-model-definition
+      - pipeline-model-extensions
+      - pipeline-stage-step
+      - pipeline-stage-tags-metadata
+      - plain-credentials
+      - plugin-util-api
+      - prism-api
+      - resource-disposer
+      - run-condition
+      - scm-api
+      - script-security
+      - snakeyaml-api
+      - snakeyaml-engine-api
+      - ssh-agent
+      - ssh-credentials
+      - ssh-slaves
+      - structs
+      - theme-manager
+      - timestamper
+      - token-macro
+      - trilead-api
+      - variant
+      - warnings-ng
+      - woodstox-core-api
+      - workflow-aggregator
+      - workflow-api
+      - workflow-basic-steps
+      - workflow-cps
+      - workflow-durable-task-step
+      - workflow-job
+      - workflow-multibranch
+      - workflow-scm-step
+      - workflow-step-api
+      - workflow-support
+      - ws-cleanup
+      - xunit
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -18,6 +141,11 @@
 
     - name: Gather facts
       ansible.builtin.setup:
+
+    - name: Fail early when JENKINS_ADMIN_PASSWORD is not provided
+      ansible.builtin.fail:
+        msg: "Set the JENKINS_ADMIN_PASSWORD environment variable (terraform passes it via local-exec)"
+      when: not jenkins_admin_password
 
     - name: Create apt keyrings directory
       ansible.builtin.file:
@@ -50,47 +178,26 @@
         upgrade: dist
         autoremove: true
 
-    - name: Install Jenkins dependencies
+    - name: Install Jenkins and dependencies
       ansible.builtin.apt:
         name:
           - fontconfig
           - openjdk-21-jre
+          - python3-bcrypt   # used below to generate the admin password hash
+          - jenkins
         state: present
 
-    - name: Install Jenkins
-      ansible.builtin.apt:
-        name: jenkins
-        state: present
-      register: jenkins_install
-
-    - name: Ensure Jenkins service is enabled and started
-      ansible.builtin.systemd:
-        name: jenkins
-        state: started
-        enabled: true
-
-    - name: Set Jenkins web root to 0.0.0.0 (accessible from LAN)
+    - name: Expose Jenkins web UI on all interfaces (LAN access)
       ansible.builtin.lineinfile:
         path: /etc/default/jenkins
         regexp: '^JENKINS_ARGS='
         line: 'JENKINS_ARGS="--webroot=/var/cache/jenkins/war --httpListenAddress=0.0.0.0 --httpPort=8080"'
         create: true
 
-    - name: Restart Jenkins to apply configuration
-      ansible.builtin.systemd:
-        name: jenkins
-        state: restarted
-      when: jenkins_install.changed
-
-    - name: Wait for Jenkins to respond
-      ansible.builtin.uri:
-        url: http://localhost:8080/login
-        status_code: 200
-        timeout: 60
-      register: jenkins_check
-      until: jenkins_check.status == 200
-      retries: 12
-      delay: 5
+    - name: Set OS hostname
+      ansible.builtin.command:
+        cmd: hostnamectl set-hostname jenkins-server
+      changed_when: ansible_facts.hostname != 'jenkins-server'
 
     - name: Create .ssh directory for jenkins user
       ansible.builtin.file:
@@ -108,7 +215,7 @@
         group: jenkins
         mode: "0600"
 
-    - name: Create SSH config for jenkins user
+    - name: Create SSH config for jenkins user (manual ssh convenience)
       ansible.builtin.copy:
         dest: /home/jenkins/.ssh/config
         owner: jenkins
@@ -120,3 +227,253 @@
               User jenkins
               IdentityFile /home/jenkins/.ssh/jenkins-agent
               StrictHostKeyChecking accept-new
+
+    # --- Bootstrap: seed JENKINS_HOME so the first real start is fully unattended ---
+    # (no setup wizard, known admin user, declarative config applied by configuration-as-code)
+
+    - name: Stop Jenkins (package postinst may have started it already)
+      ansible.builtin.systemd:
+        name: jenkins
+        state: stopped
+
+    - name: Ensure users directory is owned by jenkins
+      ansible.builtin.file:
+        path: "{{ jenkins_home }}/users"
+        state: directory
+        owner: jenkins
+        group: jenkins
+        mode: "0755"
+
+    - name: Detect whether config.xml is still in first-boot (wizard) state
+      # fresh postinst writes a minimal config.xml without <useSecurity>;
+      # a wizard-completed or previously seeded config always has it
+      ansible.builtin.shell: grep -c "useSecurity" "{{ jenkins_home }}/config.xml" || true
+      register: config_security
+      changed_when: false
+
+    - name: Seed Jenkins config (security realm + authorization, no executors on controller)
+      # only on first boot; afterwards the existing (user-customized) config is preserved
+      ansible.builtin.copy:
+        dest: "{{ jenkins_home }}/config.xml"
+        owner: jenkins
+        group: jenkins
+        mode: "0644"
+        content: |
+          <?xml version='1.1' encoding='UTF-8'?>
+          <hudson>
+            <numExecutors>0</numExecutors>
+            <mode>NORMAL</mode>
+            <useSecurity>true</useSecurity>
+            <authorizationStrategy class="hudson.security.FullControlOnceLoggedInAuthorizationStrategy">
+              <denyAnonymousReadAccess>true</denyAnonymousReadAccess>
+            </authorizationStrategy>
+            <securityRealm class="hudson.security.HudsonPrivateSecurityRealm">
+              <disableSignup>true</disableSignup>
+              <enableCaptcha>false</enableCaptcha>
+              <passwordComplexityRule class="jenkins.security.NonePasswordComplexityRule"/>
+            </securityRealm>
+          </hudson>
+      when: config_security.stdout | default('0') | int == 0
+
+    - name: Find existing (migrated) admin user directory
+      # after the first boot, UserIdMapper renames users/admin to users/admin_<sha256>
+      ansible.builtin.find:
+        paths: "{{ jenkins_home }}/users"
+        patterns:
+          - admin
+          - "admin_*"
+        file_type: directory
+        recurse: false
+      register: admin_user_dirs
+
+    - name: Determine admin user directory
+      ansible.builtin.set_fact:
+        admin_user_dir: >-
+          {{ (admin_user_dirs.files | default([])) | map(attribute='path') | first
+             if (admin_user_dirs.files | default([]) | length) > 0
+             else (jenkins_home ~ '/users/admin') }}
+
+    - name: Compute Jenkins password hash (jbcrypt)
+      # 2.5xx MultiPasswordEncoder requires #jbcrypt:$2a$... (legacy {SHA-256} is rejected)
+      ansible.builtin.command:
+        cmd: python3 -c "import bcrypt,os;print('#jbcrypt:'+bcrypt.hashpw(os.environ['JENKINS_ADMIN_PASSWORD'].encode(),bcrypt.gensalt(10,prefix=b'2a')).decode())"
+      environment:
+        JENKINS_ADMIN_PASSWORD: "{{ jenkins_admin_password }}"
+      register: admin_hash_result
+      changed_when: false
+      no_log: true
+
+    - name: Seed admin user with known password
+      # always overwritten, so the known password survives re-runs (acts as a password reset)
+      ansible.builtin.copy:
+        dest: "{{ admin_user_dir }}/config.xml"
+        owner: jenkins
+        group: jenkins
+        mode: "0644"
+        content: |
+          <?xml version='1.1' encoding='UTF-8'?>
+          <user>
+            <id>admin</id>
+            <fullName>Administrator</fullName>
+            <properties>
+              <hudson.security.HudsonPrivateSecurityRealm_-Details>
+                <passwordHash>{{ admin_hash_result.stdout }}</passwordHash>
+              </hudson.security.HudsonPrivateSecurityRealm_-Details>
+            </properties>
+          </user>
+
+    - name: Seed Configuration-as-Code file (applied automatically on every start)
+      # single source of truth: always overwritten
+      ansible.builtin.copy:
+        dest: "{{ jenkins_home }}/jenkins.yaml"
+        owner: jenkins
+        group: jenkins
+        mode: "0600"
+        content: |
+          jenkins:
+            numExecutors: 0
+            securityRealm:
+              hudsonPrivateSecurityRealm:
+                disableSignup: true
+            authorizationStrategy:
+              loggedInUsersCanDoAnything:
+                denyAnonymousReadAccess: true
+            nodes:
+              - permanent:
+                  name: jenkins-agent
+                  remoteFS: /home/jenkins
+                  label: java,linux,node
+                  numExecutors: 4
+                  mode: NORMAL
+                  launcher:
+                    ssh:
+                      host: 192.168.51.203
+                      port: 22
+                      credentialsId: jenkins-agent
+                      launchTimeoutSeconds: 60
+                      maxNumRetries: 10
+                      retryWaitTime: 15
+                      tcpNoDelay: true
+                      workDir: /home/jenkins
+                      sshHostKeyVerificationStrategy:
+                        nonVerifyingKeyVerificationStrategy:
+          credentials:
+            system:
+              domainCredentials:
+                - credentials:
+                    - basicSSHUserPrivateKey:
+                        scope: SYSTEM
+                        id: jenkins-agent
+                        username: jenkins
+                        description: SSH key for jenkins-agent (192.168.51.203)
+                        privateKeySource:
+                          fileOnMaster:
+                            path: /home/jenkins/.ssh/jenkins-agent
+
+    - name: Start Jenkins
+      ansible.builtin.systemd:
+        name: jenkins
+        state: started
+        enabled: true
+
+    - name: Wait for Jenkins API with admin credentials (proves wizard bypass + password)
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_http_port }}/api/json?tree=jenkinsVersion"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        status_code: 200
+      register: api_check
+      until: api_check.status == 200
+      retries: 36
+      delay: 5
+      changed_when: false
+
+    # --- Bootstrap plugins (downloaded from the update center via the API) ---
+
+    - name: Check which bootstrap plugins are already installed
+      ansible.builtin.stat:
+        path: "{{ jenkins_home }}/plugins/{{ item }}.jpi"
+      loop: "{{ bootstrap_plugins }}"
+      register: plugin_files
+      changed_when: false
+
+    - name: Determine which bootstrap plugins are missing
+      ansible.builtin.set_fact:
+        missing_plugins: >-
+          {{ bootstrap_plugins | difference(
+             plugin_files.results | selectattr('stat.exists') | map(attribute='item') | list) }}
+
+    - name: Install missing bootstrap plugins (crumb + cookie session via curl)
+      # the CSRF crumb is bound to the session cookie, so the crumb fetch and the
+      # POST must share one curl cookie jar (the uri module cannot do that)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        CJ=$(mktemp)
+        trap 'rm -f "$CJ"' EXIT
+        CRUMB=$(curl -fsS -m 30 -c "$CJ" -b "$CJ" -u "admin:$JENKINS_ADMIN_PASSWORD" \
+          "http://localhost:{{ jenkins_http_port }}/crumbIssuer/api/json" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["crumb"])')
+        curl -fsS -m 900 -c "$CJ" -b "$CJ" -u "admin:$JENKINS_ADMIN_PASSWORD" \
+          -H "Jenkins-Crumb: $CRUMB" \
+          -X POST "http://localhost:{{ jenkins_http_port }}/pluginManager/installPlugins?name={{ missing_plugins | join(',') }}"
+      environment:
+        JENKINS_ADMIN_PASSWORD: "{{ jenkins_admin_password }}"
+      when: missing_plugins | length > 0
+      no_log: true
+
+    - name: Wait for plugin installation to finish (.jpi files present)
+      ansible.builtin.shell: |
+        for p in {{ missing_plugins | join(' ') }}; do
+          [ -f "{{ jenkins_home }}/plugins/$p.jpi" ] || exit 1
+        done
+      register: plugins_ready
+      until: plugins_ready.rc == 0
+      retries: 180
+      delay: 5
+      changed_when: false
+      when: missing_plugins | length > 0
+
+    - name: Restart Jenkins to load the new plugins
+      ansible.builtin.systemd:
+        name: jenkins
+        state: restarted
+      when: missing_plugins | length > 0
+
+    - name: Wait for Jenkins to be back up after restart
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_http_port }}/api/json?tree=jenkinsVersion"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        status_code: 200
+      register: back_up
+      until: back_up.status == 200
+      retries: 36
+      delay: 5
+      changed_when: false
+      when: missing_plugins | length > 0
+
+    # --- Verify the declarative config actually took effect ---
+
+    - name: Wait for Configuration-as-Code to create the jenkins-agent node
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_http_port }}/computer/api/json?tree=computer%5Bname%5D"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        status_code: 200
+      register: nodes
+      until: "'jenkins-agent' in nodes.content"
+      retries: 24
+      delay: 5
+      changed_when: false
+
+    - name: Wait for jenkins-agent node to come online
+      ansible.builtin.uri:
+        url: "http://localhost:{{ jenkins_http_port }}/computer/jenkins-agent/api/json?tree=offline"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        status_code: 200
+      register: agent_state
+      until: agent_state.json.offline == false
+      retries: 60
+      delay: 5
+      changed_when: false

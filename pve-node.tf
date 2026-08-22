@@ -129,7 +129,7 @@ resource "proxmox_virtual_environment_file" "jenkins_config" {
 }
 
 resource "proxmox_virtual_environment_vm" "jenkins_vm" {
-  name            = "jenkins-ubuntu"
+  name            = "jenkins-server"
   node_name       = var.main_node
   vm_id           = 101
   tags            = ["ubuntu", "jenkins"]
@@ -186,6 +186,10 @@ resource "null_resource" "configure_jenkins" {
 
   provisioner "local-exec" {
     command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins.yml"
+    environment = {
+      # read by the playbook via lookup('env', 'JENKINS_ADMIN_PASSWORD')
+      JENKINS_ADMIN_PASSWORD = var.jenkins_admin_password
+    }
   }
 
   depends_on = [
