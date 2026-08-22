@@ -7,8 +7,11 @@
     ansible_python_interpreter: /usr/bin/python3
     # terraform passes the value via local-exec environment
     jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    jenkins_admin_email: "{{ lookup('env', 'JENKINS_ADMIN_EMAIL') }}"
     jenkins_home: /var/lib/jenkins
     jenkins_user_home: "{{ jenkins_home }}"
+    jenkins_http_protocol: http
+    jenkins_http_host: 192.168.51.202
     jenkins_http_port: 8080
     jenkins_agent_host: 192.168.51.203
     jenkins_agent_user: jenkins
@@ -383,6 +386,19 @@
                           directEntry:
                             privateKey: |
           {{ jenkins_agent_ssh_key | trim | indent(30, first=True) }}
+
+    - name: Configure Jenkins Location (admin email and URL)
+      ansible.builtin.copy:
+        dest: "{{ jenkins_home }}/jenkins.model.JenkinsLocationConfiguration.xml"
+        owner: jenkins
+        group: jenkins
+        mode: "0644"
+        content: |
+          <?xml version='1.1' encoding='UTF-8'?>
+          <jenkins.model.JenkinsLocationConfiguration>
+            <adminAddress>{{ jenkins_admin_email }}</adminAddress>
+            <jenkinsUrl>{{ jenkins_http_protocol }}://{{ jenkins_http_host }}:{{ jenkins_http_port }}</jenkinsUrl>
+          </jenkins.model.JenkinsLocationConfiguration>
 
     - name: Create Jenkins systemd override directory
       ansible.builtin.file:

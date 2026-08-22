@@ -1,25 +1,25 @@
 variable "main_node" {
-  type = string
+  type    = string
   default = "pve"
 }
 
 variable "backup_dir" {
-  type = string
+  type    = string
   default = "backup-slow-dir"
 }
 
 variable "vm_dir" {
-  type = string
+  type    = string
   default = "local-lvm"
 }
 
 variable "os_ssd_fast" {
-  type = string
+  type    = string
   default = "os-ssd-fast"
 }
 
 variable "os_ssd_slow" {
-  type = string
+  type    = string
   default = "os-ssd-slow"
 }
 
@@ -30,4 +30,9 @@ variable "hf_token" {
 variable "jenkins_admin_password" {
   type        = string
   description = "Jenkins admin password"
+}
+
+variable "jenkins_admin_email" {
+  type        = string
+  description = "admin emial"
 }

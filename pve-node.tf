@@ -53,9 +53,9 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 
   # Second disk (additional storage)
   disk {
-    datastore_id = var.os_ssd_fast  # or use a different datastore
+    datastore_id = var.os_ssd_fast # or use a different datastore
     interface    = "virtio1"
-    size         = 200          # size in GB
+    size         = 200 # size in GB
     backup       = true
     # file_format = "raw"      # optional: specify format (raw, qcow2)
   }
@@ -67,22 +67,22 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   # GPU 1
   hostpci {
     device = "hostpci0"
-    id = "0000:03:00"
+    id     = "0000:03:00"
   }
   # GPU 2
   hostpci {
     device = "hostpci1"
-    id = "0000:2d:00"
+    id     = "0000:2d:00"
   }
   # GPU 3
   hostpci {
     device = "hostpci2"
-    id = "0000:43:00"
+    id     = "0000:43:00"
   }
   # GPU 4
   hostpci {
     device = "hostpci3"
-    id = "0000:63:00"
+    id     = "0000:63:00"
   }
 
   keyboard_layout = "de-ch"
@@ -97,7 +97,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 
 resource "null_resource" "configure_llm" {
   triggers = {
-    vm_id = proxmox_virtual_environment_vm.llm_vm.id
+    vm_id    = proxmox_virtual_environment_vm.llm_vm.id
     playbook = filesha256("${path.module}/vms/pve/llm.yml")
     files = sha256(join("", [
       for file in fileset("${path.module}/vms/pve/scripts", "*") :
@@ -277,6 +277,7 @@ resource "null_resource" "configure_jenkins_agent" {
     command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins-agent.yml"
     environment = {
       JENKINS_ADMIN_PASSWORD = var.jenkins_admin_password
+      JENKINS_ADMIN_EMAIL    = var.jenkins_admin_email
       JENKINS_AGENT_SSH_KEY  = data.local_file.jenkins_private_key.content
     }
   }
