@@ -271,6 +271,8 @@ resource "null_resource" "configure_jenkins_agent" {
   # debugging jenkins
   # sudo journalctl -u jenkins.service -n 150 --no-pager
   # sudo rm -fR /var/lib/jenkins/ && sudo apt remove jenkins
+  # journalctl -u jenkins.service --since "now" -f
+  # journalctl -u jenkins.service -n 150 -f
   provisioner "local-exec" {
     command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins-agent.yml"
     environment = {
