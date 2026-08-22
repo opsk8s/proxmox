@@ -209,7 +209,7 @@ resource "proxmox_virtual_environment_file" "jenkins_agent_config" {
 
   source_raw {
     data = templatefile("${path.module}/vms/cloud-init/jenkins-agent-config.yaml", {
-      jenkins_public_key = trimspace(data.local_file.jenkins_agent_key.content)
+      jenkins_public_key = trimspace(data.local_file.jenkins_public_key.content)
     })
     file_name = "jenkins-agent-config.yaml"
   }
@@ -268,8 +268,15 @@ resource "null_resource" "configure_jenkins_agent" {
     playbook = filesha256("${path.module}/vms/pve/jenkins-agent.yml")
   }
 
+  # debugging jenkins
+  # sudo journalctl -u jenkins.service -n 150 --no-pager
+  # sudo rm -fR /var/lib/jenkins/ && sudo apt remove jenkins
   provisioner "local-exec" {
     command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/jenkins-agent.yml"
+    environment = {
+      JENKINS_ADMIN_PASSWORD = var.jenkins_admin_password
+      JENKINS_AGENT_SSH_KEY  = data.local_file.jenkins_private_key.content
+    }
   }
 
   depends_on = [
