@@ -415,7 +415,7 @@
       ansible.builtin.uri:
         url: "http://localhost:{{ jenkins_http_port }}/api/json"
         user: admin
-        password: "{{ initial_admin_password }}"
+        password: "{{ jenkins_admin_password }}"
         force_basic_auth: true
         status_code: 200
         timeout: 10
@@ -430,9 +430,7 @@
         set -euo pipefail
         CJ=$(mktemp)
         trap 'rm -f "$CJ"' EXIT
-        
-        # Get CSRF crumb with session cookie
-        CRUMB=$(curl -fsS -m 30 -c "$CJ" -u "admin:{{ jenkins_admin_password }}" \
+        CRUMB=$(curl -fsS -m 30 -c "$CJ" -b "$CJ" -u "admin:{{ jenkins_admin_password }}" \
           "http://localhost:{{ jenkins_http_port }}/crumbIssuer/api/json" \
           | python3 -c 'import json,sys; print(json.load(sys.stdin)["crumb"])')
         
@@ -442,8 +440,6 @@
           -X POST "http://localhost:{{ jenkins_http_port }}/setupWizard/completeInstall"
       args:
         executable: /bin/bash
-      register: complete_install
-      changed_when: complete_install.rc == 0
 
     - name: Final restart to apply JCasC configuration
       ansible.builtin.systemd:
