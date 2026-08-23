@@ -438,6 +438,34 @@
         group: llm
         mode: "0755"
 
+    - name: Install logrotate (separate from the main apt task so a fresh
+         install does not trip the driver-reboot task)
+      ansible.builtin.apt:
+        name: logrotate
+        state: present
+
+    # copytruncate: llama-server keeps its log fd open (nohup >>) and has no
+    # rotation signal, so the file is copied to the rotated name and the
+    # original truncated in place. `su llm llm` is required because the log
+    # directory is not root-owned.
+    - name: Deploy logrotate config for llama-server logs
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/llama-server
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          /home/llm/logs/*.log {
+              daily
+              rotate 14
+              compress
+              delaycompress
+              missingok
+              notifempty
+              copytruncate
+              su llm llm
+          }
+
     # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
     # so the unit is Type=forking. The script's pre-flight kills any stale instance
     # on the port, which also makes systemctl restart behave.
