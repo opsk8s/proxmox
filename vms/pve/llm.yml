@@ -430,6 +430,82 @@
         name: nginx
         state: reloaded
 
+    - name: Ensure logs directory exists (start-server.sh writes pid/log files here)
+      ansible.builtin.file:
+        path: /home/llm/logs
+        state: directory
+        owner: llm
+        group: llm
+        mode: "0755"
+
+    # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
+    # so the unit is Type=forking. The script's pre-flight kills any stale instance
+    # on the port, which also makes systemctl restart behave.
+    - name: Deploy llama-server systemd units (one per GPU/port)
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=llama.cpp Vulkan server (port {{ item.port }}, GPU {{ item.device }})
+          After=network-online.target mnt-models.mount
+          Wants=network-online.target
+
+          [Service]
+          Type=forking
+          PIDFile=/home/llm/logs/llama_server_port_{{ item.port }}.pid
+          User=llm
+          Group=llm
+          WorkingDirectory=/home/llm
+          Environment=HOME=/home/llm
+          ExecStart=/home/llm/scripts/start-server.sh vulkan {{ item.port }} 262144 {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      loop:
+        - { port: 8001, device: 0 }
+        - { port: 8002, device: 1 }
+        - { port: 8003, device: 2 }
+        - { port: 8004, device: 3 }
+
+    - name: Reload systemd to pick up the new units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start llama-server instances (start on VM boot, restart on crash)
+      ansible.builtin.systemd:
+        name: "llama-server-{{ item.port }}"
+        state: started
+        enabled: true
+      loop:
+        - { port: 8001 }
+        - { port: 8002 }
+        - { port: 8003 }
+        - { port: 8004 }
+
+    - name: Wait for all 4 llama-server ports to come up
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        timeout: 900
+      loop: [8001, 8002, 8003, 8004]
+
+    - name: Verify each server answers /health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item }}/health"
+        status_code: 200
+        timeout: 10
+      register: llama_health
+      until: llama_health.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+      loop: [8001, 8002, 8003, 8004]
+
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
