@@ -95,13 +95,16 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 }
 
 
+# AMD
+# sudo amd-smi set -g 0 1 2 3 -P COMPUTE
+# sudo amd-smi set -o 300 -l HIGH
 resource "null_resource" "configure_llm" {
   triggers = {
     vm_id    = proxmox_virtual_environment_vm.llm_vm.id
     playbook = filesha256("${path.module}/vms/pve/llm.yml")
     files = sha256(join("", [
-      for file in fileset("${path.module}/vms/pve/scripts", "*") :
-      "${file}:${filesha256("${path.module}/vms/pve/scripts/${file}")}"
+      for file in fileset("${path.module}/vms/pve/llm-scripts", "*") :
+      "${file}:${filesha256("${path.module}/vms/pve/llm-scripts/${file}")}"
     ]))
   }
 
@@ -284,5 +287,86 @@ resource "null_resource" "configure_jenkins_agent" {
 
   depends_on = [
     proxmox_virtual_environment_vm.jenkins_agent_vm
+  ]
+}
+
+# open-webui vm
+# WARNING: same cloud-init seed caveat as the jenkins VM above —
+# changing the snippet after creation forces a FULL VM recreation.
+resource "proxmox_virtual_environment_file" "openwebui_config" {
+  content_type = "snippets"
+  datastore_id = var.backup_dir
+  node_name    = var.main_node
+
+  source_raw {
+    data = templatefile("${path.module}/vms/cloud-init/openwebui-config.yaml", {
+      openwebui_public_key = trimspace(data.local_file.public_key.content)
+    })
+    file_name = "openwebui-config.yaml"
+  }
+}
+
+resource "proxmox_virtual_environment_vm" "openwebui_vm" {
+  name            = "open-webui"
+  node_name       = var.main_node
+  vm_id           = 103
+  tags            = ["ubuntu", "webui", "llm"]
+  stop_on_destroy = true
+
+  initialization {
+    ip_config {
+      ipv4 {
+        address = "192.168.51.204/24"
+        gateway = "192.168.51.1"
+      }
+    }
+
+    user_data_file_id = proxmox_virtual_environment_file.openwebui_config.id
+  }
+
+  cpu {
+    sockets = 1
+    cores   = 2
+    # default kvm64 exposes a baseline-only CPU (no SSE4.2/POPCNT) and numpy
+    # 2.x wheels refuse to load on it; pass the host's feature set through
+    type    = "host"
+  }
+
+  memory {
+    dedicated = 4096
+  }
+
+  disk {
+    datastore_id = var.vm_dir
+    file_id      = proxmox_download_file.ubuntu_cloud_image.id
+    interface    = "virtio0"
+    size         = 32
+    backup       = true
+  }
+
+  network_device {
+    bridge = "vmbr0"
+  }
+  keyboard_layout = "de-ch"
+
+  depends_on = [
+    proxmox_virtual_environment_file.openwebui_config,
+    proxmox_download_file.ubuntu_cloud_image,
+    proxmox_download_file.fedora_cloud_image
+  ]
+}
+
+resource "null_resource" "configure_openwebui" {
+  triggers = {
+    vm_id    = proxmox_virtual_environment_vm.openwebui_vm.id
+    playbook = filesha256("${path.module}/vms/pve/open-webui.yml")
+  }
+
+  provisioner "local-exec" {
+    command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/open-webui.yml"
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.openwebui_vm
   ]
 }

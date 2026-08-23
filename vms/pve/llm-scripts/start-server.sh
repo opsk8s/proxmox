@@ -197,6 +197,7 @@ elif [[ "$API" == "vulkan" ]]; then
         RADV_DEBUG="nocng,nodcc"
 	      RADV_PERFTEST="nogttspill"
         DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
+        GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1
         HSA_OVERRIDE_GFX_VERSION=1201
         MALLOC_TRIM_THRESHOLD_=-1
         "$LLAMA_BIN"
@@ -311,6 +312,8 @@ LLAMA_CMD+=(
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
     --load-mode none
+     -t 8
+     -tb 16
 )
 
 # disabled ram offloading

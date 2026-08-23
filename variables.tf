@@ -34,5 +34,5 @@ variable "jenkins_admin_password" {
 
 variable "jenkins_admin_email" {
   type        = string
-  description = "admin emial"
+  description = "admin email"
 }

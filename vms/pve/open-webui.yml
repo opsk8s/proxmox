@@ -1,0 +1,130 @@
+---
+- name: Install and configure Open WebUI (pip package)
+  hosts: open-webui
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    webui_user: openwebui
+    webui_app_dir: /home/openwebui/open-webui
+    webui_venv: /home/openwebui/open-webui/.venv
+    uv_bin: /home/openwebui/.local/bin/uv
+    webui_port: 8080
+    webui_ip: 192.168.51.204
+    # OpenAI-compatible endpoint: nginx load balancer on the LLM VM in front
+    # of the 4 llama.cpp servers (ports 8001-8004, see llm.yml)
+    llm_api_base_url: http://192.168.51.201:8000/v1
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: open-webui
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+        state: present
+
+    # uv is only used to provision a CPython 3.11: the open-webui wheel
+    # requires Python >=3.11,<3.13, but Ubuntu 26.04 ships 3.14.
+    - name: Install uv (manages the CPython 3.11 for the venv)
+      ansible.builtin.shell: >
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: /home/openwebui/.local/bin/uv
+      become: true
+      become_user: openwebui
+
+    - name: Create virtualenv with CPython 3.11
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} venv --python 3.11 {{ webui_venv }}"
+      args:
+        creates: "{{ webui_venv }}"
+      become: true
+      become_user: openwebui
+
+    - name: Install open-webui
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --python {{ webui_venv }}/bin/python open-webui"
+      become: true
+      become_user: openwebui
+
+    - name: Ensure data directory exists (sqlite db, uploads, vector db)
+      ansible.builtin.file:
+        path: "{{ webui_app_dir }}/data"
+        state: directory
+        owner: openwebui
+        group: openwebui
+        mode: "0755"
+
+    - name: Deploy open-webui.service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/open-webui.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Open WebUI
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=openwebui
+          Group=openwebui
+          WorkingDirectory={{ webui_app_dir }}
+          Environment=HOME=/home/openwebui
+          Environment=PATH=/home/openwebui/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          # keep data out of the venv so upgrades/reinstalls never wipe it
+          Environment=DATA_DIR={{ webui_app_dir }}/data
+          # OpenAI-compatible endpoint (llama.cpp servers on the LLM VM via nginx LB)
+          Environment=OPENAI_API_BASE_URL={{ llm_api_base_url }}
+          Environment=OPENAI_API_KEY=local
+          Environment=SCARF_NO_ANALYTICS=true
+          Environment=DO_NOT_TRACK=true
+          ExecStart={{ webui_venv }}/bin/open-webui serve --host 0.0.0.0 --port {{ webui_port }}
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start Open WebUI
+      ansible.builtin.systemd:
+        name: open-webui
+        state: started
+        enabled: true
+
+    - name: Wait for Open WebUI to answer on the LAN
+      ansible.builtin.uri:
+        url: "http://{{ webui_ip }}:{{ webui_port }}/"
+        status_code: 200
+        timeout: 10
+      register: webui_check
+      until: webui_check.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
