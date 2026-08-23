@@ -20,6 +20,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   tags            = ["ubuntu", "llm", "rocm", "amd"]
   stop_on_destroy = true
 
+  agent {
+    enabled = true
+  }
+
   initialization {
     # uncomment and specify the datastore for cloud-init disk if default `local-lvm` is not available
     # datastore_id = "local-lvm"
@@ -158,6 +162,10 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
   tags            = ["ubuntu", "jenkins"]
   stop_on_destroy = true
 
+  agent {
+    enabled = true
+  }
+
   initialization {
     # uncomment and specify the datastore for cloud-init disk if default `local-lvm` is not available
     # datastore_id = "local-lvm"
@@ -240,6 +248,10 @@ resource "proxmox_virtual_environment_vm" "jenkins_agent_vm" {
   vm_id           = 102
   tags            = ["ubuntu", "jenkins", "agents"]
   stop_on_destroy = true
+
+  agent {
+    enabled = true
+  }
 
   initialization {
     ip_config {
@@ -329,6 +341,10 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
   tags            = ["ubuntu", "webui", "llm"]
   stop_on_destroy = true
 
+  agent {
+    enabled = true
+  }
+
   initialization {
     ip_config {
       ipv4 {
@@ -343,8 +359,8 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
   cpu {
     sockets = 1
     cores   = 2
-    # default kvm64 exposes a baseline-only CPU (no SSE4.2/POPCNT) and numpy
-    # 2.x wheels refuse to load on it; pass the host's feature set through
+    # the default qemu64 CPU exposes a baseline-only feature set (no SSE4.2/POPCNT)
+    # and numpy 2.x wheels refuse to load on it; pass the host's features through
     type    = "host"
   }
 
