@@ -220,7 +220,7 @@ if [[ "$MTP" == "mtp" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 4
+      --spec-draft-n-max 3
     )
 elif [[ "$MTP" == "mtp-vision" ]]; then
     LLAMA_CMD+=(
@@ -229,7 +229,7 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 4
+      --spec-draft-n-max 3
     )
 elif [[ "$MTP" == "dspark" ]]; then
     LLAMA_CMD+=(
@@ -312,8 +312,6 @@ LLAMA_CMD+=(
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
     --load-mode none
-     -t 8
-     -tb 16
 )
 
 # disabled ram offloading
