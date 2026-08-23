@@ -311,7 +311,7 @@ LLAMA_CMD+=(
     --cache-type-v "$KV_CACHE_TYPE"
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
-    --load-mode none
+    --load-mode mmap
 )
 
 # disabled ram offloading
