@@ -36,3 +36,8 @@ variable "jenkins_admin_email" {
   type        = string
   description = "admin email"
 }
+
+variable "postgres_password" {
+  type        = string
+  description = "PostgreSQL superuser password"
+}

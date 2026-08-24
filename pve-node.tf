@@ -1,4 +1,4 @@
-# used physical cores 8 + 1 + 2 + 1 = 13
+# used physical cores 8 + 1 + 2 + 1 + 4 = 16
 # VM - llm
 resource "proxmox_virtual_environment_file" "llm_config" {
   content_type = "snippets"
@@ -401,5 +401,90 @@ resource "null_resource" "configure_openwebui" {
 
   depends_on = [
     proxmox_virtual_environment_vm.openwebui_vm
+  ]
+}
+
+# postgres vm
+# WARNING: same cloud-init seed caveat as the jenkins VM above —
+# changing the snippet after creation forces a FULL VM recreation.
+resource "proxmox_virtual_environment_file" "postgres_config" {
+  content_type = "snippets"
+  datastore_id = var.backup_dir
+  node_name    = var.main_node
+
+  source_raw {
+    data = templatefile("${path.module}/vms/cloud-init/postgres-config.yaml", {
+      postgres_public_key = trimspace(data.local_file.public_key.content)
+    })
+    file_name = "postgres-config.yaml"
+  }
+}
+
+resource "proxmox_virtual_environment_vm" "postgres_vm" {
+  name            = "postgres"
+  node_name       = var.main_node
+  vm_id           = 104
+  tags            = ["ubuntu", "postgres", "db"]
+  stop_on_destroy = true
+
+  agent {
+    enabled = true
+  }
+
+  initialization {
+    ip_config {
+      ipv4 {
+        address = "192.168.51.205/24"
+        gateway = "192.168.51.1"
+      }
+    }
+
+    user_data_file_id = proxmox_virtual_environment_file.postgres_config.id
+  }
+  // 4 physical
+  cpu {
+    sockets = 1
+    cores   = 8
+  }
+
+  memory {
+    dedicated = 16384
+  }
+
+  disk {
+    datastore_id = var.vm_dir
+    file_id      = proxmox_download_file.ubuntu_cloud_image.id
+    interface    = "virtio0"
+    size         = 50
+    backup       = true
+  }
+
+  network_device {
+    bridge = "vmbr0"
+  }
+  keyboard_layout = "de-ch"
+
+  depends_on = [
+    proxmox_virtual_environment_file.postgres_config,
+    proxmox_download_file.ubuntu_cloud_image,
+    proxmox_download_file.fedora_cloud_image
+  ]
+}
+
+resource "null_resource" "configure_postgres" {
+  triggers = {
+    vm_id    = proxmox_virtual_environment_vm.postgres_vm.id
+    playbook = filesha256("${path.module}/vms/pve/postgres.yml")
+  }
+
+  provisioner "local-exec" {
+    command = "ansible-playbook -i vms/pve/inventory.ini vms/pve/postgres.yml"
+    environment = {
+      POSTGRES_PASSWORD = var.postgres_password
+    }
+  }
+
+  depends_on = [
+    proxmox_virtual_environment_vm.postgres_vm
   ]
 }

@@ -1,0 +1,13 @@
+#cloud-config
+hostname: postgres
+timezone: Europe/Zurich
+users:
+  - name: postgres
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${postgres_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server
