@@ -488,17 +488,17 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh vulkan {{ item.port }} 262144 {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0 }
-        - { port: 8002, device: 1 }
-        - { port: 8003, device: 2 }
-        - { port: 8004, device: 3 }
+        - { port: 8001, device: 0, api: vulkan, context: 262144 }
+        - { port: 8002, device: 1, api: vulkan, context: 262144 }
+        - { port: 8003, device: 2, api: rocm, context: 262144 }
+        - { port: 8004, device: 3, api: rocm, context: 262144 }
 
     - name: Reload systemd to pick up the new units
       ansible.builtin.systemd:
