@@ -1,6 +1,5 @@
 # clean build
 #
-export HIP_PATH=$ROCM_PATH
 echo "START:"
 cd $HOME/llama.cpp
 pwd 

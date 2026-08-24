@@ -158,7 +158,7 @@
           export HIP_CLANG_PATH="$ROCM_PATH/llvm/bin"
           export BITCODE_PATH=$(find $ROCM_PATH -type d -name bitcode -print -quit)
           export PATH="$ROCM_PATH/bin:$ROCM_PATH/llvm/bin:$PATH"
-          export LD_LIBRARY_PATH="$ROCM_PATH/lib:$ROCM_PATH/lib64:$ROCM_PATH/llvm/lib"
+          export LD_LIBRARY_PATH="$ROCM_PATH/core-7.14/lib:$LD_LIBRARY_PATH"
           export HIP_PLATFORM=amd
           export PYTORCH_ROCM_ARCH="gfx1201"
           export HIP_ARCHITECTURES="gfx1201"
@@ -497,8 +497,8 @@
       loop:
         - { port: 8001, device: 0, api: vulkan, context: 262144 }
         - { port: 8002, device: 1, api: vulkan, context: 262144 }
-        - { port: 8003, device: 2, api: rocm, context: 262144 }
-        - { port: 8004, device: 3, api: rocm, context: 262144 }
+        - { port: 8003, device: 2, api: vulkan, context: 262144 }
+        - { port: 8004, device: 3, api: vulkan, context: 262144 }
 
     - name: Reload systemd to pick up the new units
       ansible.builtin.systemd:
