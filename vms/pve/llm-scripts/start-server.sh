@@ -233,7 +233,6 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
     )
 elif [[ "$MTP" == "dspark" ]]; then
     LLAMA_CMD+=(
-      --model-draft "$DFLASH_FILE"
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-dspark
@@ -245,13 +244,11 @@ elif [[ "$MTP" == "dspark-vision" ]]; then
       --image-min-tokens 1024
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
-      --model-draft "$DFLASH_FILE"
       --spec-type draft-dspark
       --spec-draft-n-max 7
     )
 elif [[ "$MTP" == "dflash" ]]; then
     LLAMA_CMD+=(
-      --model-draft "$DFLASH_FILE"
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-dflash
@@ -263,7 +260,6 @@ elif [[ "$MTP" == "dflash-vision" ]]; then
       --image-min-tokens 1024
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
-      --model-draft "$DFLASH_FILE"
       --spec-type draft-dflash
       --spec-draft-n-max 7
     )

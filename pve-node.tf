@@ -1,3 +1,4 @@
+# used physical cores 8 + 1 + 2 + 1 = 13
 # VM - llm
 resource "proxmox_virtual_environment_file" "llm_config" {
   content_type = "snippets"
@@ -37,7 +38,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 
     user_data_file_id = proxmox_virtual_environment_file.llm_config.id
   }
-
+  // 8 physical
   cpu {
     sockets = 1
     cores   = 16
@@ -179,10 +180,10 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
 
     user_data_file_id = proxmox_virtual_environment_file.jenkins_config.id
   }
-
+  // 1 physical
   cpu {
     sockets = 1
-    cores   = 4
+    cores   = 2
   }
 
   memory {
@@ -263,10 +264,10 @@ resource "proxmox_virtual_environment_vm" "jenkins_agent_vm" {
 
     user_data_file_id = proxmox_virtual_environment_file.jenkins_agent_config.id
   }
-
+  // 2 physical
   cpu {
     sockets = 1
-    cores   = 8
+    cores   = 4
   }
 
   memory {
@@ -355,7 +356,7 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
 
     user_data_file_id = proxmox_virtual_environment_file.openwebui_config.id
   }
-
+  // one physical
   cpu {
     sockets = 1
     cores   = 2
