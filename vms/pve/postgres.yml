@@ -57,20 +57,17 @@
         line: "host    all             all             {{ lan_subnet }}    scram-sha-256"
         insertafter: EOF
 
-    # password passed as a psql variable (list-form command, no shell)
-    # so special characters cannot break quoting
+    # password embedded as a SQL literal with single quotes doubled;
+    # argv list means no shell, so other special characters are safe
     - name: Set superuser password
       ansible.builtin.command:
-        cmd:
+        argv:
           - psql
           - -v
           - "ON_ERROR_STOP=1"
-          - -v
-          - "pw={{ postgres_password }}"
           - -qc
-          - "ALTER USER postgres WITH PASSWORD :'pw';"
+          - "ALTER USER postgres WITH PASSWORD '{{ postgres_password | replace(\"'\", \"''\") }}';"
       become_user: postgres
-      no_log: true
       changed_when: true
 
     - name: Enable and start PostgreSQL
