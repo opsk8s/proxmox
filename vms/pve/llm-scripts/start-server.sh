@@ -308,6 +308,7 @@ LLAMA_CMD+=(
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
     --load-mode mmap
+    --metrics
 )
 
 # disabled ram offloading
