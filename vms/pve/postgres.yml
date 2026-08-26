@@ -51,6 +51,17 @@
         regexp: '^#?listen_addresses'
         line: "listen_addresses = '*'"
 
+    # Ubuntu 26.04 / systemd 258 per-user /dev/shm quota reaps files owned by
+    # the login uid when the session ends; the postgres server runs as that
+    # same uid, so posix DSM segments get deleted from under the postmaster
+    # and every new backend fails with "could not open shared memory segment".
+    # sysv IPC segments are not files in /dev/shm, so they are unaffected.
+    - name: Use sysv dynamic shared memory
+      ansible.builtin.lineinfile:
+        path: /etc/postgresql/{{ pg_version.stdout }}/main/postgresql.conf
+        regexp: '^#?dynamic_shared_memory_type'
+        line: "dynamic_shared_memory_type = sysv"
+
     - name: Allow LAN clients (scram-sha-256)
       ansible.builtin.lineinfile:
         path: /etc/postgresql/{{ pg_version.stdout }}/main/pg_hba.conf
