@@ -1,0 +1,339 @@
+---
+# Installs the scrape targets on every VM:
+#   - node_exporter on all 5 VMs (CPU, RAM, disk, network, filesystem)
+#   - AMD GPU textfile collector on llm-ubuntu (util, VRAM, temp, power)
+#   - postgres_exporter on postgres
+#   - Jenkins prometheus plugin on the jenkins controller
+# (open-webui has no metrics endpoint — it is probed by blackbox_exporter
+#  running in the monitoring LXC, nothing to install there)
+- name: Install metrics exporters
+  hosts: llm:jenkins:jenkins-agent:open-webui:postgres
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    # terraform passes the values via local-exec environment
+    jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
+    postgres_password: "{{ lookup('env', 'POSTGRES_PASSWORD') }}"
+
+    node_exporter_version: "1.12.1"
+    node_exporter_url: "https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.linux-amd64.tar.gz"
+
+    postgres_exporter_version: "0.20.1"
+    postgres_exporter_url: "https://github.com/prometheus-community/postgres_exporter/releases/download/v{{ postgres_exporter_version }}/postgres_exporter-{{ postgres_exporter_version }}.linux-amd64.tar.gz"
+
+  tasks:
+    # --- node_exporter (all VMs) -------------------------------------------
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+        state: present
+
+    - name: Install node_exporter (pinned version)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/node_exporter.tar.gz {{ node_exporter_url }}
+        rm -rf /opt/node_exporter
+        mkdir -p /opt/node_exporter
+        tar -xzf /tmp/node_exporter.tar.gz -C /opt/node_exporter
+        BIN=$(find /opt/node_exporter -type f -name 'node_exporter*' | head -1)
+        install -m 0755 "$BIN" /usr/local/bin/node_exporter
+        rm -f /tmp/node_exporter.tar.gz
+
+    - name: Ensure textfile collector directory exists
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: nobody
+        group: nogroup
+        mode: "0755"
+
+    - name: Deploy node_exporter service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/node_exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=nobody
+          Group=nogroup
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter \
+            --web.listen-address=0.0.0.0:9100 \
+            --collector.textfile.directory=/var/lib/node_exporter/textfile_collector \
+            --collector.filesystem.mount-points-exclude='^/(dev|proc|sys|var/lib/docker/.+|snap/.*)$'
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd to pick up new units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: node_exporter
+        state: started
+        enabled: true
+
+    - name: Wait for node_exporter to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9100
+        timeout: 60
+
+    # --- AMD GPU collector (llm only) ----------------------------------------
+    - name: Deploy AMD GPU metrics collector
+      ansible.builtin.copy:
+        src: dashboards/gpu-metrics.py
+        dest: /usr/local/bin/gpu-metrics.py
+        owner: root
+        group: root
+        mode: "0755"
+      when: "'llm' in group_names"
+
+    - name: Deploy gpu-metrics oneshot service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/gpu-metrics.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=AMD GPU metrics collector (node_exporter textfile)
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/python3 /usr/local/bin/gpu-metrics.py
+      when: "'llm' in group_names"
+
+    - name: Deploy gpu-metrics timer (15s)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/gpu-metrics.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run GPU metrics collector every 15 seconds
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitActiveSec=15s
+          AccuracySec=1s
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      when: "'llm' in group_names"
+
+    - name: Enable and start gpu-metrics timer
+      ansible.builtin.systemd:
+        name: gpu-metrics.timer
+        state: started
+        enabled: true
+      when: "'llm' in group_names"
+
+    - name: Run GPU collector once and verify the textfile
+      ansible.builtin.command:
+        cmd: /usr/bin/python3 /usr/local/bin/gpu-metrics.py
+      when: "'llm' in group_names"
+
+    - name: Verify GPU textfile has metrics
+      ansible.builtin.command:
+        cmd: grep -c '^amdgpu_' /var/lib/node_exporter/textfile_collector/amdgpu.prom
+      register: gpu_metrics_check
+      changed_when: false
+      failed_when: gpu_metrics_check.stdout | int == 0
+      when: "'llm' in group_names"
+
+    # --- postgres_exporter (postgres only) -----------------------------------
+    - name: Detect installed PostgreSQL major version
+      ansible.builtin.shell: ls /etc/postgresql
+      register: pg_version
+      changed_when: false
+      when: "'postgres' in group_names"
+
+    - name: Install postgres_exporter (pinned version)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/postgres_exporter.tar.gz {{ postgres_exporter_url }}
+        rm -rf /opt/postgres_exporter
+        mkdir -p /opt/postgres_exporter
+        tar -xzf /tmp/postgres_exporter.tar.gz -C /opt/postgres_exporter
+        BIN=$(find /opt/postgres_exporter -type f -name 'postgres_exporter*' | head -1)
+        install -m 0755 "$BIN" /usr/local/bin/postgres_exporter
+        rm -f /tmp/postgres_exporter.tar.gz
+      when: "'postgres' in group_names"
+
+    - name: Deploy postgres_exporter credentials file
+      ansible.builtin.copy:
+        dest: /etc/postgres_exporter.env
+        owner: postgres
+        group: postgres
+        mode: "0640"
+        content: |
+          PGHOST=127.0.0.1
+          PGPORT=5432
+          PGUSER=postgres
+          PGPASSWORD={{ postgres_password }}
+          PGDATA=/var/lib/postgresql/{{ pg_version.stdout }}/main
+      when: "'postgres' in group_names"
+
+    - name: Deploy postgres_exporter service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/postgres_exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus Postgres Exporter
+          After=network-online.target postgresql.service
+          Wants=network-online.target
+
+          [Service]
+          User=postgres
+          Group=postgres
+          Type=simple
+          EnvironmentFile=/etc/postgres_exporter.env
+          ExecStart=/usr/local/bin/postgres_exporter \
+            --web.listen-address=0.0.0.0:9187
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      when: "'postgres' in group_names"
+
+    - name: Enable and start postgres_exporter
+      ansible.builtin.systemd:
+        name: postgres_exporter
+        state: started
+        enabled: true
+      when: "'postgres' in group_names"
+
+    - name: Wait for postgres_exporter to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9187
+        timeout: 60
+      when: "'postgres' in group_names"
+
+    # --- Jenkins prometheus plugin (controller only) ---------------------------
+    - name: Wait for Jenkins API
+      ansible.builtin.uri:
+        url: "http://localhost:8080/api/json?tree=jenkinsVersion"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        timeout: 10
+      register: jenkins_api
+      until: jenkins_api.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+      when: "'jenkins' in group_names"
+
+    - name: Check whether the prometheus plugin is already installed
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /var/lib/jenkins/plugins/prometheus.jpi
+        - /var/lib/jenkins/plugins/prometheus.hpi
+      register: prom_plugin_files
+      when: "'jenkins' in group_names"
+
+    - name: Install prometheus plugin (missing only; same crumb pattern as jenkins.yml)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        CJ=$(mktemp)
+        trap 'rm -f "$CJ"' EXIT
+        CRUMB=$(curl -fsS -m 30 -c "$CJ" -b "$CJ" -u "admin:$JENKINS_ADMIN_PASSWORD" \
+          "http://localhost:8080/crumbIssuer/api/json" \
+          | python3 -c 'import json,sys; print(json.load(sys.stdin)["crumb"])')
+        curl -fsS -m 900 -c "$CJ" -b "$CJ" -u "admin:$JENKINS_ADMIN_PASSWORD" \
+          -H "Jenkins-Crumb: $CRUMB" \
+          -H "Content-Type: application/json" \
+          -X POST "http://localhost:8080/pluginManager/installPlugins" \
+          -d '{"dynamicLoad": false, "plugins": ["prometheus"]}'
+      args:
+        executable: /bin/bash
+      environment:
+        JENKINS_ADMIN_PASSWORD: "{{ jenkins_admin_password }}"
+      register: prom_plugin_install
+      changed_when: true
+      when: >-
+        'jenkins' in group_names
+        and not (prom_plugin_files.results | selectattr('stat.exists') | list)
+
+    # installPlugins queues the download ASYNCHRONOUSLY and returns 200 before
+    # the .jpi lands on disk — restarting Jenkins before that kills the
+    # in-flight install, so wait for the file first (same pattern as jenkins.yml)
+    - name: Wait for prometheus plugin file to land
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ ! -e /var/lib/jenkins/plugins/prometheus.jpi ] && [ ! -e /var/lib/jenkins/plugins/prometheus.hpi ]; then
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      register: prom_plugin_ready
+      until: prom_plugin_ready.rc == 0
+      retries: 10
+      delay: 60
+      changed_when: false
+      when: >-
+        'jenkins' in group_names
+        and prom_plugin_install is defined
+        and prom_plugin_install is changed
+
+    - name: Restart Jenkins to load the prometheus plugin
+      ansible.builtin.systemd:
+        name: jenkins
+        state: restarted
+      when: >-
+        'jenkins' in group_names
+        and prom_plugin_install is defined
+        and prom_plugin_install is changed
+
+    - name: Wait for Jenkins to come back
+      ansible.builtin.uri:
+        url: "http://localhost:8080/api/json?tree=jenkinsVersion"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        timeout: 30
+      register: jenkins_back
+      until: jenkins_back.status == 200
+      retries: 60
+      delay: 10
+      changed_when: false
+      when: "'jenkins' in group_names"
+
+    - name: Verify the Jenkins prometheus endpoint answers
+      ansible.builtin.uri:
+        url: "http://localhost:8080/prometheus/"
+        user: admin
+        password: "{{ jenkins_admin_password }}"
+        force_basic_auth: true
+        status_code: 200
+        timeout: 10
+      register: jenkins_metrics
+      until: jenkins_metrics.status == 200
+      retries: 10
+      delay: 5
+      changed_when: false
+      when: "'jenkins' in group_names"

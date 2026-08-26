@@ -1,0 +1,360 @@
+---
+- name: Deploy Prometheus + Grafana monitoring stack (LXC)
+  hosts: monitoring
+  become: true
+  # must stay false: with gather_facts: true the play dies at "Gathering
+  # Facts" before wait_for_connection below gets a chance to wait for SSH
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    # terraform passes the value via local-exec environment
+    grafana_admin_password: "{{ lookup('env', 'GRAFANA_ADMIN_PASSWORD') }}"
+    lan_gw: 192.168.51.1
+
+    blackbox_version: "0.28.0"
+    blackbox_url: "https://github.com/prometheus/blackbox_exporter/releases/download/v{{ blackbox_version }}/blackbox_exporter-{{ blackbox_version }}.linux-amd64.tar.gz"
+
+    # Prometheus has NO official apt repo (apt.prometheus.io is dead);
+    # install a pinned release binary instead.
+    prometheus_version: "3.14.0"
+    prometheus_url: "https://github.com/prometheus/prometheus/releases/download/v{{ prometheus_version }}/prometheus-{{ prometheus_version }}.linux-amd64.tar.gz"
+
+    prometheus_config: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets: ["localhost:9090"]
+
+        # node_exporter on every VM
+        - job_name: nodes
+          static_configs:
+            - targets: ["192.168.51.201:9100"]
+              labels: {instance_name: "llm-ubuntu"}
+            - targets: ["192.168.51.202:9100"]
+              labels: {instance_name: "jenkins-server"}
+            - targets: ["192.168.51.203:9100"]
+              labels: {instance_name: "jenkins-agent"}
+            - targets: ["192.168.51.204:9100"]
+              labels: {instance_name: "open-webui"}
+            - targets: ["192.168.51.205:9100"]
+              labels: {instance_name: "postgres"}
+
+        # llama.cpp servers: native /metrics endpoint (one per GPU)
+        - job_name: llama
+          static_configs:
+            - targets: ["192.168.51.201:8001", "192.168.51.201:8002", "192.168.51.201:8003", "192.168.51.201:8004"]
+              labels: {instance_name: "llm-ubuntu"}
+
+        - job_name: postgres
+          static_configs:
+            - targets: ["192.168.51.205:9187"]
+              labels: {instance_name: "postgres"}
+
+        # Jenkins prometheus plugin default endpoint (trailing slash required)
+        - job_name: jenkins
+          metrics_path: /prometheus/
+          static_configs:
+            - targets: ["192.168.51.202:8080"]
+              labels: {instance_name: "jenkins-server"}
+
+        # blackbox probe for services without a metrics endpoint
+        - job_name: blackbox
+          metrics_path: /probe
+          params:
+            module: [http_2xx]
+          static_configs:
+            - targets: ["http://192.168.51.204:8080/"]
+              labels: {instance_name: "open-webui"}
+          relabel_configs:
+            - source_labels: [__address__]
+              target_label: __param_target
+            - source_labels: [__param_target]
+              target_label: instance
+            - target_label: __address__
+              replacement: 127.0.0.1:9115
+
+    blackbox_config: |
+      modules:
+        http_2xx:
+          prober: http
+          timeout: 10s
+          http:
+            valid_status_codes: [200, 201, 204]
+            method: GET
+
+    grafana_datasource: |
+      apiVersion: 1
+      datasources:
+        # name matters: the imported community dashboards reference "Prometheus" by name
+        - name: Prometheus
+          uid: prometheus
+          type: prometheus
+          access: proxy
+          url: http://127.0.0.1:9090
+          isDefault: true
+          editable: true
+
+    grafana_dashboard_provider: |
+      apiVersion: 1
+      providers:
+        - name: local
+          folder: Proxmox
+          type: file
+          disableDeletion: false
+          updateIntervalSeconds: 30
+          allowUiUpdates: true
+          options:
+            path: /var/lib/grafana/dashboards
+            foldersFromFilesStructure: false
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 5
+
+    # NOTE: no cloud-init wait here — the CT template has no cloud-init
+    # binary; the PVE startup hook (monitoring-bootstrap.sh) already ran
+    # pre-start and guaranteed IP/DNS/sshd/key before SSH came up.
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: monitoring
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    # --- Prometheus (pinned static binary; no official apt repo exists) -----
+    - name: Install Prometheus (pinned version)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/prometheus.tar.gz {{ prometheus_url }}
+        rm -rf /opt/prometheus
+        mkdir -p /opt/prometheus
+        tar -xzf /tmp/prometheus.tar.gz -C /opt/prometheus --strip-components=1
+        rm -f /tmp/prometheus.tar.gz
+
+    - name: Deploy Prometheus service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus monitoring system
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=root
+          ExecStart=/opt/prometheus/prometheus --config.file=/etc/prometheus/prometheus.yml --storage.tsdb.path=/var/lib/prometheus --storage.tsdb.retention.time=30d --web.listen-address=0.0.0.0:9090
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart prometheus
+
+    # --- Grafana (official apt repo) ----------------------------------------
+    - name: Fetch Grafana GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://apt.grafana.com/gpg.key | gpg --dearmor -o /etc/apt/keyrings/grafana.gpg
+      args:
+        creates: /etc/apt/keyrings/grafana.gpg
+
+    - name: Add Grafana APT repository
+      ansible.builtin.deb822_repository:
+        name: grafana
+        types: deb
+        uris: https://apt.grafana.com
+        suites: stable
+        components: main
+        signed_by: /etc/apt/keyrings/grafana.gpg
+        state: present
+
+    - name: Install Grafana
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - grafana
+        state: present
+
+    # --- blackbox_exporter (static binary) ----------------------------------
+    - name: Install blackbox_exporter (pinned version)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/blackbox_exporter.tar.gz {{ blackbox_url }}
+        rm -rf /opt/blackbox_exporter
+        mkdir -p /opt/blackbox_exporter
+        tar -xzf /tmp/blackbox_exporter.tar.gz -C /opt/blackbox_exporter
+        BIN=$(find /opt/blackbox_exporter -type f -name 'blackbox_exporter*' | head -1)
+        install -m 0755 "$BIN" /usr/local/bin/blackbox_exporter
+        rm -f /tmp/blackbox_exporter.tar.gz
+
+    - name: Create blackbox_exporter config directory
+      ansible.builtin.file:
+        path: /etc/blackbox_exporter
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy blackbox_exporter config
+      ansible.builtin.copy:
+        dest: /etc/blackbox_exporter/blackbox.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ blackbox_config }}"
+      notify: restart blackbox
+
+    - name: Deploy blackbox_exporter service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/blackbox_exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Prometheus Blackbox Exporter
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=root
+          ExecStart=/usr/local/bin/blackbox_exporter --config.file=/etc/blackbox_exporter/blackbox.yml --web.listen-address=0.0.0.0:9115
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart blackbox
+
+    # --- Prometheus configuration -------------------------------------------
+    - name: Create Prometheus config directory
+      ansible.builtin.file:
+        path: /etc/prometheus
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy Prometheus scrape configuration
+      ansible.builtin.copy:
+        dest: /etc/prometheus/prometheus.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ prometheus_config }}"
+      notify: restart prometheus
+
+    # --- Grafana provisioning -------------------------------------------------
+    - name: Deploy Grafana datasource provisioning
+      ansible.builtin.copy:
+        dest: /etc/grafana/provisioning/datasources/prometheus.yaml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ grafana_datasource }}"
+      notify: restart grafana
+
+    - name: Deploy Grafana dashboard provider
+      ansible.builtin.copy:
+        dest: /etc/grafana/provisioning/dashboards/dashboards.yaml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ grafana_dashboard_provider }}"
+      notify: restart grafana
+
+    - name: Ensure dashboard directory exists
+      ansible.builtin.file:
+        path: /var/lib/grafana/dashboards
+        state: directory
+        owner: grafana
+        group: grafana
+        mode: "0755"
+
+    - name: Deploy dashboards (version-controlled JSON)
+      ansible.builtin.copy:
+        src: dashboards/
+        dest: /var/lib/grafana/dashboards/
+        owner: grafana
+        group: grafana
+        mode: "0644"
+      notify: restart grafana
+
+    - name: Set Grafana admin password
+      ansible.builtin.command: >
+        grafana cli --homepath /usr/share/grafana
+        admin reset-admin-password {{ grafana_admin_password }}
+      # MUST run as the grafana user: running it as root creates the SQLite
+      # DB root-owned and grafana-server (user=grafana) then crash-loops with
+      # "unable to open database file".
+      become_user: grafana
+      changed_when: true
+      no_log: true
+
+    # --- Services -------------------------------------------------------------
+    - name: Reload systemd to pick up new units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop: [ prometheus, grafana-server, blackbox_exporter ]
+
+    - name: Wait for Prometheus to answer
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9090
+        timeout: 120
+
+    - name: Wait for Grafana to answer
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 3000
+        timeout: 120
+
+    - name: Wait for blackbox_exporter to answer
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 9115
+        timeout: 120
+
+  handlers:
+    - name: restart prometheus
+      ansible.builtin.systemd:
+        name: prometheus
+        state: restarted
+
+    - name: restart grafana
+      ansible.builtin.systemd:
+        name: grafana-server
+        state: restarted
+
+    - name: restart blackbox
+      ansible.builtin.systemd:
+        name: blackbox_exporter
+        state: restarted

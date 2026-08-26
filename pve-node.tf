@@ -1,4 +1,4 @@
-# used physical cores 8 + 1 + 2 + 1 + 4 = 16
+# used physical cores 4 + 1 + 2 + 1 + 4 = 12
 # VM - llm
 resource "proxmox_virtual_environment_file" "llm_config" {
   content_type = "snippets"
@@ -41,7 +41,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   // 8 physical
   cpu {
     sockets = 1
-    cores   = 16
+    cores   = 8
   }
 
   memory {
