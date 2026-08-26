@@ -112,7 +112,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(llama_server_decode_tokens_total[2m]))",
+          "expr": "sum(rate(llamacpp:tokens_predicted_total[2m]))",
           "refId": "A"
         }
       ]
@@ -316,7 +316,7 @@
       },
       "targets": [
         {
-          "expr": "jenkins_builds_queued",
+          "expr": "max(jenkins_queue_size_value)",
           "refId": "A"
         }
       ]
@@ -510,7 +510,7 @@
       },
       "targets": [
         {
-          "expr": "rate(llama_server_decode_tokens_total[2m])",
+          "expr": "rate(llamacpp:tokens_predicted_total[2m])",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
@@ -519,7 +519,7 @@
     {
       "id": 12,
       "type": "timeseries",
-      "title": "LLM context used tokens per server",
+      "title": "LLM largest sequence (tokens) per server",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -549,7 +549,7 @@
       },
       "targets": [
         {
-          "expr": "llama_server_context_used_tokens",
+          "expr": "llamacpp:n_tokens_max",
           "legendFormat": "{{instance}}",
           "refId": "A"
         }
