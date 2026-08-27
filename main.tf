@@ -27,3 +27,72 @@ data "local_file" "jenkins_public_key" {
 data "local_file" "jenkins_private_key" {
   filename = "/Users/ffhs/.ssh/jenkins-agent"
 }
+
+module "llm" {
+  source          = "./modules/llm"
+  main_node       = var.main_node
+  backup_dir      = var.backup_dir
+  vm_dir          = var.vm_dir
+  os_ssd_fast     = var.os_ssd_fast
+  ubuntu_image_id = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key  = trimspace(data.local_file.public_key.content)
+  hf_token        = var.hf_token
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "jenkins" {
+  source                 = "./modules/jenkins"
+  main_node              = var.main_node
+  backup_dir             = var.backup_dir
+  vm_dir                 = var.vm_dir
+  ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key         = trimspace(data.local_file.public_key.content)
+  jenkins_admin_password = var.jenkins_admin_password
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "jenkins_agent" {
+  source                 = "./modules/jenkins-agent"
+  main_node              = var.main_node
+  backup_dir             = var.backup_dir
+  vm_dir                 = var.vm_dir
+  ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key         = trimspace(data.local_file.jenkins_public_key.content)
+  ssh_private_key        = data.local_file.jenkins_private_key.content
+  jenkins_admin_password = var.jenkins_admin_password
+  jenkins_admin_email    = var.jenkins_admin_email
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "open_webui" {
+  source          = "./modules/open-webui"
+  main_node       = var.main_node
+  backup_dir      = var.backup_dir
+  vm_dir          = var.vm_dir
+  ubuntu_image_id = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key  = trimspace(data.local_file.public_key.content)
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "postgres" {
+  source            = "./modules/postgres"
+  main_node         = var.main_node
+  backup_dir        = var.backup_dir
+  vm_dir            = var.vm_dir
+  ubuntu_image_id   = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key    = trimspace(data.local_file.public_key.content)
+  postgres_password = var.postgres_password
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+#  zpool import -f os-ssd-fast
+#  zpool import -f os-ssd-slow
+#  zpool import -f backup-slow
+#  pvesm add zfspool os-ssd-fast --pool os-ssd-fast
+#  pvesm add zfspool os-ssd-slow --pool os-ssd-slow
+#  pvesm add zfspool backup-slow --pool backup-slow
