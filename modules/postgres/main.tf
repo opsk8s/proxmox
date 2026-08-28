@@ -7,7 +7,7 @@ resource "proxmox_virtual_environment_file" "postgres_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = templatefile("${path.module}/postgres-config.yaml", {
+    data = templatefile("${path.module}/cloud-init.yaml", {
       postgres_public_key = trimspace(var.ssh_public_key)
     })
     file_name = "postgres-config.yaml"
@@ -61,22 +61,23 @@ resource "proxmox_virtual_environment_vm" "postgres_vm" {
   depends_on = [
     proxmox_virtual_environment_file.postgres_config
   ]
-}
 
-resource "null_resource" "configure_postgres" {
-  triggers = {
-    vm_id    = proxmox_virtual_environment_vm.postgres_vm.id
-    playbook = filesha256("${path.module}/postgres.yml")
-  }
-
-  provisioner "local-exec" {
-    command = "ansible-playbook -i ${path.module}/inventory.ini ${path.module}/postgres.yml"
-    environment = {
-      POSTGRES_PASSWORD = var.postgres_password
+  lifecycle {
+    action_trigger {
+      events     = [after_create, after_update]
+      actions    = [action.ansible_playbook_run.configure_postgres]
+      on_failure = halt
     }
   }
+}
 
-  depends_on = [
-    proxmox_virtual_environment_vm.postgres_vm
-  ]
+action "ansible_playbook_run" "configure_postgres" {
+  config {
+    playbooks        = ["${path.module}/ansible.yml"]
+    inventory_files  = ["${path.module}/inventory.ini"]
+    private_key_file = var.ssh_private_key_file
+    extra_vars = {
+      postgres_password = var.postgres_password
+    }
+  }
 }

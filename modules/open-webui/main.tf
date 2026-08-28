@@ -7,7 +7,7 @@ resource "proxmox_virtual_environment_file" "openwebui_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = templatefile("${path.module}/openwebui-config.yaml", {
+    data = templatefile("${path.module}/cloud-init.yaml", {
       openwebui_public_key = trimspace(var.ssh_public_key)
     })
     file_name = "openwebui-config.yaml"
@@ -64,19 +64,20 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
   depends_on = [
     proxmox_virtual_environment_file.openwebui_config
   ]
+
+  lifecycle {
+    action_trigger {
+      events     = [after_create, after_update]
+      actions    = [action.ansible_playbook_run.configure_openwebui]
+      on_failure = halt
+    }
+  }
 }
 
-resource "null_resource" "configure_openwebui" {
-  triggers = {
-    vm_id    = proxmox_virtual_environment_vm.openwebui_vm.id
-    playbook = filesha256("${path.module}/open-webui.yml")
+action "ansible_playbook_run" "configure_openwebui" {
+  config {
+    playbooks        = ["${path.module}/ansible.yml"]
+    inventory_files  = ["${path.module}/inventory.ini"]
+    private_key_file = var.ssh_private_key_file
   }
-
-  provisioner "local-exec" {
-    command = "ansible-playbook -i ${path.module}/inventory.ini ${path.module}/open-webui.yml"
-  }
-
-  depends_on = [
-    proxmox_virtual_environment_vm.openwebui_vm
-  ]
 }

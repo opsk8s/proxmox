@@ -5,7 +5,7 @@ resource "proxmox_virtual_environment_file" "jenkins_agent_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = templatefile("${path.module}/jenkins-agent-config.yaml", {
+    data = templatefile("${path.module}/cloud-init.yaml", {
       jenkins_public_key = trimspace(var.ssh_public_key)
     })
     file_name = "jenkins-agent-config.yaml"
@@ -59,29 +59,26 @@ resource "proxmox_virtual_environment_vm" "jenkins_agent_vm" {
   depends_on = [
     proxmox_virtual_environment_file.jenkins_agent_config
   ]
-}
 
-resource "null_resource" "configure_jenkins_agent" {
-  triggers = {
-    vm_id    = proxmox_virtual_environment_vm.jenkins_agent_vm.id
-    playbook = filesha256("${path.module}/jenkins-agent.yml")
-  }
-
-  # debugging jenkins
-  # sudo journalctl -u jenkins.service -n 150 --no-pager
-  # sudo rm -fR /var/lib/jenkins/ && sudo apt remove jenkins
-  # journalctl -u jenkins.service --since "now" -f
-  # journalctl -u jenkins.service -n 150 -f
-  provisioner "local-exec" {
-    command = "ansible-playbook -i ${path.module}/inventory.ini ${path.module}/jenkins-agent.yml"
-    environment = {
-      JENKINS_ADMIN_PASSWORD = var.jenkins_admin_password
-      JENKINS_ADMIN_EMAIL    = var.jenkins_admin_email
-      JENKINS_AGENT_SSH_KEY  = var.ssh_private_key
+  lifecycle {
+    action_trigger {
+      events     = [after_create, after_update]
+      actions    = [action.ansible_playbook_run.configure_jenkins_agent]
+      on_failure = halt
     }
   }
+}
 
-  depends_on = [
-    proxmox_virtual_environment_vm.jenkins_agent_vm
-  ]
+# debugging jenkins
+# sudo journalctl -u jenkins.service -n 150 --no-pager
+# sudo rm -fR /var/lib/jenkins/ && sudo apt remove jenkins
+# journalctl -u jenkins.service --since "now" -f
+# journalctl -u jenkins.service -n 150 -f
+# NOTE: uses the jenkins-agent key, not the shared proxmox-ubuntu key
+action "ansible_playbook_run" "configure_jenkins_agent" {
+  config {
+    playbooks        = ["${path.module}/ansible.yml"]
+    inventory_files  = ["${path.module}/inventory.ini"]
+    private_key_file = var.ssh_private_key_file
+  }
 }

@@ -24,19 +24,16 @@ data "local_file" "jenkins_public_key" {
   filename = "/Users/ffhs/.ssh/jenkins-agent.pub"
 }
 
-data "local_file" "jenkins_private_key" {
-  filename = "/Users/ffhs/.ssh/jenkins-agent"
-}
-
 module "llm" {
-  source          = "./modules/llm"
-  main_node       = var.main_node
-  backup_dir      = var.backup_dir
-  vm_dir          = var.vm_dir
-  os_ssd_fast     = var.os_ssd_fast
-  ubuntu_image_id = proxmox_download_file.ubuntu_cloud_image.id
-  ssh_public_key  = trimspace(data.local_file.public_key.content)
-  hf_token        = var.hf_token
+  source               = "./modules/llm"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  os_ssd_fast          = var.os_ssd_fast
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  hf_token             = var.hf_token
+  ssh_private_key_file = var.ssh_private_key_file
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -49,43 +46,44 @@ module "jenkins" {
   ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key         = trimspace(data.local_file.public_key.content)
   jenkins_admin_password = var.jenkins_admin_password
+  ssh_private_key_file   = var.ssh_private_key_file
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
 
 module "jenkins_agent" {
-  source                 = "./modules/jenkins-agent"
-  main_node              = var.main_node
-  backup_dir             = var.backup_dir
-  vm_dir                 = var.vm_dir
-  ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
-  ssh_public_key         = trimspace(data.local_file.jenkins_public_key.content)
-  ssh_private_key        = data.local_file.jenkins_private_key.content
-  jenkins_admin_password = var.jenkins_admin_password
-  jenkins_admin_email    = var.jenkins_admin_email
+  source               = "./modules/jenkins-agent"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.jenkins_public_key.content)
+  ssh_private_key_file = var.jenkins_agent_ssh_private_key_file
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
 
 module "open_webui" {
-  source          = "./modules/open-webui"
-  main_node       = var.main_node
-  backup_dir      = var.backup_dir
-  vm_dir          = var.vm_dir
-  ubuntu_image_id = proxmox_download_file.ubuntu_cloud_image.id
-  ssh_public_key  = trimspace(data.local_file.public_key.content)
+  source               = "./modules/open-webui"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file = var.ssh_private_key_file
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
 
 module "postgres" {
-  source            = "./modules/postgres"
-  main_node         = var.main_node
-  backup_dir        = var.backup_dir
-  vm_dir            = var.vm_dir
-  ubuntu_image_id   = proxmox_download_file.ubuntu_cloud_image.id
-  ssh_public_key    = trimspace(data.local_file.public_key.content)
-  postgres_password = var.postgres_password
+  source               = "./modules/postgres"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  postgres_password    = var.postgres_password
+  ssh_private_key_file = var.ssh_private_key_file
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }

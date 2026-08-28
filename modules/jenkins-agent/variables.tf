@@ -18,14 +18,6 @@ variable "ssh_public_key" {
   type = string
 }
 
-variable "ssh_private_key" {
-  type = string
-}
-
-variable "jenkins_admin_password" {
-  type = string
-}
-
-variable "jenkins_admin_email" {
+variable "ssh_private_key_file" {
   type = string
 }

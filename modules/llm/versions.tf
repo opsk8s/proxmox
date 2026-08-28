@@ -4,8 +4,9 @@ terraform {
       source  = "bpg/proxmox"
       version = "~> 0.111.1"
     }
-    null = {
-      source = "hashicorp/null"
+    ansible = {
+      source  = "ansible/ansible"
+      version = "~> 1.4.0"
     }
   }
 }

@@ -6,7 +6,7 @@ resource "proxmox_virtual_environment_file" "llm_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = templatefile("${path.module}/llm-config.yaml", {
+    data = templatefile("${path.module}/cloud-init.yaml", {
       llm_public_key = trimspace(var.ssh_public_key)
       hf_token       = var.hf_token
     })
@@ -45,8 +45,8 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   }
 
   memory {
-   # dedicated = 65536
-    dedicated = 131072
+   dedicated = 65536
+   # dedicated = 131072
   }
 
   disk {
@@ -61,7 +61,6 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   disk {
     datastore_id = var.os_ssd_fast # or use a different datastore
     interface    = "virtio1"
-    import_from  = ""
     size         = 500 # size in GB
     backup       = true
     # file_format = "raw"      # optional: specify format (raw, qcow2)
@@ -113,6 +112,14 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   depends_on = [
     proxmox_virtual_environment_file.llm_config
   ]
+
+  lifecycle {
+    action_trigger {
+      events     = [after_create, after_update]
+      actions    = [action.ansible_playbook_run.configure_llm]
+      on_failure = halt
+    }
+  }
 }
 
 
@@ -120,21 +127,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 # sudo amd-smi set -g 0 1 2 3 -P COMPUTE
 # sudo amd-smi set -o 300
 # sudo amd-smi set -g 0 1 2 3 -l HIGH
-resource "null_resource" "configure_llm" {
-  triggers = {
-    vm_id    = proxmox_virtual_environment_vm.llm_vm.id
-    playbook = filesha256("${path.module}/llm.yml")
-    files = sha256(join("", [
-      for file in fileset("${path.module}/llm-scripts", "*") :
-      "${file}:${filesha256("${path.module}/llm-scripts/${file}")}"
-    ]))
+action "ansible_playbook_run" "configure_llm" {
+  config {
+    playbooks        = ["${path.module}/ansible.yml"]
+    inventory_files  = ["${path.module}/inventory.ini"]
+    private_key_file = var.ssh_private_key_file
   }
-
-  provisioner "local-exec" {
-    command = "ansible-playbook -i ${path.module}/inventory.ini ${path.module}/llm.yml"
-  }
-
-  depends_on = [
-    proxmox_virtual_environment_vm.llm_vm
-  ]
 }

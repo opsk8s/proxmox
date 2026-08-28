@@ -6,8 +6,8 @@
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
-        timeout: 300
-        delay: 10
+        timeout: 150
+        delay: 5
         sleep: 5
 
     - name: Wait for cloud-init to finish
@@ -306,69 +306,69 @@
       become: true
       become_user: llm
 #
-    - name: Download Qwen3.8 Q6 model via wget
-      ansible.builtin.shell: |
-        # Define the direct URL for the specific GGUF file
-        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-
-        # Download using wget with Authorization header
-        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-             -O "${OUTPUT_FILE}" \
-             "${MODEL_URL}"
-      args:
-        executable: /bin/bash
-        # Idempotency: Only run if the file does NOT exist
-        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
-      become: true
-      become_user: llm
+#    - name: Download Qwen3.8 Q6 model via wget
+#      ansible.builtin.shell: |
+#        # Define the direct URL for the specific GGUF file
+#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
 #
-    - name: Download Qwen3.8 Q8 model via wget
-      ansible.builtin.shell: |
-        # Define the direct URL for the specific GGUF file
-        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-
-        # Download using wget with Authorization header
-        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-             -O "${OUTPUT_FILE}" \
-             "${MODEL_URL}"
-      args:
-        executable: /bin/bash
-        # Idempotency: Only run if the file does NOT exist
-        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
-      become: true
-      become_user: llm
+#        # Download using wget with Authorization header
+#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+#             -O "${OUTPUT_FILE}" \
+#             "${MODEL_URL}"
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Only run if the file does NOT exist
+#        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
+#      become: true
+#      become_user: llm
 #
-    - name: Download Qwen3.8-Flash Q4 model via wget (all chunks)
-      ansible.builtin.shell: |
-        set -euo pipefail
-
-        BASE="https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS"
-        DIR="/mnt/models"
-
-        for i in 1 2 3; do
-          PART=$(printf '%05d' "$i")
-          OUTPUT_FILE="${DIR}/Qwen3.8-Flash-Next-UD-IQ4_XS-${PART}-of-00003.gguf"
-
-          # Idempotency: skip chunks that already exist
-          if [ -f "${OUTPUT_FILE}" ]; then
-            echo "exists, skipping: ${OUTPUT_FILE}"
-            continue
-          fi
-
-          echo "downloading: ${OUTPUT_FILE}"
-          wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-               -O "${OUTPUT_FILE}" \
-               "${BASE}-${PART}-of-00003.gguf"
-        done
-
-        /home/llm/llama.cpp/build-vulkan/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
-      args:
-        executable: /bin/bash
-        creates: /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
-      become: true
-      become_user: llm
+#    - name: Download Qwen3.8 Q8 model via wget
+#      ansible.builtin.shell: |
+#        # Define the direct URL for the specific GGUF file
+#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+#
+#        # Download using wget with Authorization header
+#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+#             -O "${OUTPUT_FILE}" \
+#             "${MODEL_URL}"
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Only run if the file does NOT exist
+#        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+#      become: true
+#      become_user: llm
+#
+#    - name: Download Qwen3.8-Flash Q4 model via wget (all chunks)
+#      ansible.builtin.shell: |
+#        set -euo pipefail
+#
+#        BASE="https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS"
+#        DIR="/mnt/models"
+#
+#        for i in 1 2 3; do
+#          PART=$(printf '%05d' "$i")
+#          OUTPUT_FILE="${DIR}/Qwen3.8-Flash-Next-UD-IQ4_XS-${PART}-of-00003.gguf"
+#
+#          # Idempotency: skip chunks that already exist
+#          if [ -f "${OUTPUT_FILE}" ]; then
+#            echo "exists, skipping: ${OUTPUT_FILE}"
+#            continue
+#          fi
+#
+#          echo "downloading: ${OUTPUT_FILE}"
+#          wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+#               -O "${OUTPUT_FILE}" \
+#               "${BASE}-${PART}-of-00003.gguf"
+#        done
+#
+#        /home/llm/llama.cpp/build-vulkan/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
+#      args:
+#        executable: /bin/bash
+#        creates: /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
+#      become: true
+#      become_user: llm
 #
     - name: Download Qwen3.8 Vision model via wget
       ansible.builtin.shell: |
@@ -390,189 +390,189 @@
       become: true
       become_user: llm
 
-#    - name: Install nginx
-#      ansible.builtin.apt:
-#        name: nginx
-#        state: present
-#
-#    - name: Remove default nginx site
-#      ansible.builtin.file:
-#        path: /etc/nginx/sites-enabled/default
-#        state: absent
-#
-#    - name: Deploy LLM load balancer config
-#      ansible.builtin.copy:
-#        dest: /etc/nginx/sites-available/llm
-#        mode: "0644"
-#        content: |
-#          upstream llama_servers {
-#              least_conn;
-#              server 127.0.0.1:8001 max_fails=3 fail_timeout=30s;
-#              server 127.0.0.1:8002 max_fails=3 fail_timeout=30s;
-#              server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
-#              server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
-#              keepalive 16;
-#          }
-#
-#          server {
-#              listen 8000 default_server;
-#              listen [::]:8000 default_server;
-#              server_name _;
-#
-#              # LLM inference is long-running (seconds to minutes)
-#              proxy_connect_timeout 60s;
-#              proxy_read_timeout 3600s;
-#              proxy_send_timeout 3600s;
-#              send_timeout 3600s;
-#
-#              # Streaming support (SSE from llama-server)
-#              proxy_buffering off;
-#              proxy_cache off;
-#
-#              # Vision requests with base64 images can be large
-#              client_max_body_size 100M;
-#
-#              location / {
-#                  proxy_pass http://llama_servers;
-#                  proxy_http_version 1.1;
-#                  proxy_set_header Connection "";
-#                  proxy_set_header Host $host;
-#                  proxy_set_header X-Real-IP $remote_addr;
-#                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-#                  proxy_set_header X-Forwarded-Proto $scheme;
-#
-#                  # Retry only on connection failures, NOT on read timeout
-#                  # (a slow LLM generation is normal, not a proxy error)
-#                  proxy_next_upstream error http_502 http_503;
-#                  proxy_next_upstream_tries 2;
-#              }
-#          }
-#
-#    - name: Enable LLM load balancer site
-#      ansible.builtin.file:
-#        src: /etc/nginx/sites-available/llm
-#        dest: /etc/nginx/sites-enabled/llm
-#        state: link
-#
-#    - name: Test nginx configuration
-#      ansible.builtin.command:
-#        cmd: nginx -t
-#      changed_when: false
-#
-#    - name: Start and enable nginx
-#      ansible.builtin.systemd:
-#        name: nginx
-#        state: started
-#        enabled: true
-#
-#    - name: Reload nginx
-#      ansible.builtin.systemd:
-#        name: nginx
-#        state: reloaded
-#
-#    - name: Ensure logs directory exists (start-server.sh writes pid/log files here)
-#      ansible.builtin.file:
-#        path: /home/llm/logs
-#        state: directory
-#        owner: llm
-#        group: llm
-#        mode: "0755"
-#
-#    - name: Install logrotate (separate from the main apt task so a fresh
-#         install does not trip the driver-reboot task)
-#      ansible.builtin.apt:
-#        name: logrotate
-#        state: present
-#
-#    # copytruncate: llama-server keeps its log fd open (nohup >>) and has no
-#    # rotation signal, so the file is copied to the rotated name and the
-#    # original truncated in place. `su llm llm` is required because the log
-#    # directory is not root-owned.
-#    - name: Deploy logrotate config for llama-server logs
-#      ansible.builtin.copy:
-#        dest: /etc/logrotate.d/llama-server
-#        owner: root
-#        group: root
-#        mode: "0644"
-#        content: |
-#          /home/llm/logs/*.log {
-#              daily
-#              rotate 14
-#              compress
-#              delaycompress
-#              missingok
-#              notifempty
-#              copytruncate
-#              su llm llm
-#          }
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Remove default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Deploy LLM load balancer config
+      ansible.builtin.copy:
+        dest: /etc/nginx/sites-available/llm
+        mode: "0644"
+        content: |
+          upstream llama_servers {
+              least_conn;
+              server 127.0.0.1:8001 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8002 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
+              server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
+              keepalive 16;
+          }
+
+          server {
+              listen 8000 default_server;
+              listen [::]:8000 default_server;
+              server_name _;
+
+              # LLM inference is long-running (seconds to minutes)
+              proxy_connect_timeout 60s;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+              send_timeout 3600s;
+
+              # Streaming support (SSE from llama-server)
+              proxy_buffering off;
+              proxy_cache off;
+
+              # Vision requests with base64 images can be large
+              client_max_body_size 100M;
+
+              location / {
+                  proxy_pass http://llama_servers;
+                  proxy_http_version 1.1;
+                  proxy_set_header Connection "";
+                  proxy_set_header Host $host;
+                  proxy_set_header X-Real-IP $remote_addr;
+                  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+                  proxy_set_header X-Forwarded-Proto $scheme;
+
+                  # Retry only on connection failures, NOT on read timeout
+                  # (a slow LLM generation is normal, not a proxy error)
+                  proxy_next_upstream error http_502 http_503;
+                  proxy_next_upstream_tries 2;
+              }
+          }
+
+    - name: Enable LLM load balancer site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/llm
+        dest: /etc/nginx/sites-enabled/llm
+        state: link
+
+    - name: Test nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Start and enable nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    - name: Ensure logs directory exists (start-server.sh writes pid/log files here)
+      ansible.builtin.file:
+        path: /home/llm/logs
+        state: directory
+        owner: llm
+        group: llm
+        mode: "0755"
+
+    - name: Install logrotate (separate from the main apt task so a fresh
+         install does not trip the driver-reboot task)
+      ansible.builtin.apt:
+        name: logrotate
+        state: present
+
+    # copytruncate: llama-server keeps its log fd open (nohup >>) and has no
+    # rotation signal, so the file is copied to the rotated name and the
+    # original truncated in place. `su llm llm` is required because the log
+    # directory is not root-owned.
+    - name: Deploy logrotate config for llama-server logs
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/llama-server
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          /home/llm/logs/*.log {
+              daily
+              rotate 14
+              compress
+              delaycompress
+              missingok
+              notifempty
+              copytruncate
+              su llm llm
+          }
 
     # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
     # so the unit is Type=forking. The script's pre-flight kills any stale instance
     # on the port, which also makes systemctl restart behave.
-#    - name: Deploy llama-server systemd units (one per GPU/port)
-#      ansible.builtin.copy:
-#        dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
-#        owner: root
-#        group: root
-#        mode: "0644"
-#        content: |
-#          [Unit]
-#          Description=llama.cpp Vulkan server (port {{ item.port }}, GPU {{ item.device }})
-#          After=network-online.target mnt-models.mount
-#          Wants=network-online.target
-#
-#          [Service]
-#          Type=forking
-#          PIDFile=/home/llm/logs/llama_server_port_{{ item.port }}.pid
-#          User=llm
-#          Group=llm
-#          WorkingDirectory=/home/llm
-#          Environment=HOME=/home/llm
-#          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
-#          Restart=on-failure
-#          RestartSec=10
-#
-#          [Install]
-#          WantedBy=multi-user.target
-#      loop:
-#        - { port: 8001, device: 0, api: vulkan, context: 262144 }
-#        - { port: 8002, device: 1, api: vulkan, context: 262144 }
-#        - { port: 8003, device: 2, api: vulkan, context: 262144 }
-#        - { port: 8004, device: 3, api: vulkan, context: 262144 }
-#
-#    - name: Reload systemd to pick up the new units
-#      ansible.builtin.systemd:
-#        daemon_reload: true
-#
-#    - name: Enable and start llama-server instances (start on VM boot, restart on crash)
-#      ansible.builtin.systemd:
-#        name: "llama-server-{{ item.port }}"
-#        state: started
-#        enabled: true
-#      loop:
-#        - { port: 8001 }
-#        - { port: 8002 }
-#        - { port: 8003 }
-#        - { port: 8004 }
-#
-#    - name: Wait for all 4 llama-server ports to come up
-#      ansible.builtin.wait_for:
-#        host: 127.0.0.1
-#        port: "{{ item }}"
-#        timeout: 900
-#      loop: [8001, 8002, 8003, 8004]
-#
-#    - name: Verify each server answers /health
-#      ansible.builtin.uri:
-#        url: "http://127.0.0.1:{{ item }}/health"
-#        status_code: 200
-#        timeout: 10
-#      register: llama_health
-#      until: llama_health.status == 200
-#      retries: 30
-#      delay: 10
-#      changed_when: false
-#      loop: [8001, 8002, 8003, 8004]
+    - name: Deploy llama-server systemd units (one per GPU/port)
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=llama.cpp Vulkan server (port {{ item.port }}, GPU {{ item.device }})
+          After=network-online.target mnt-models.mount
+          Wants=network-online.target
+
+          [Service]
+          Type=forking
+          PIDFile=/home/llm/logs/llama_server_port_{{ item.port }}.pid
+          User=llm
+          Group=llm
+          WorkingDirectory=/home/llm
+          Environment=HOME=/home/llm
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      loop:
+        - { port: 8001, device: 0, api: vulkan, context: 262144 }
+        - { port: 8002, device: 1, api: vulkan, context: 262144 }
+        - { port: 8003, device: 2, api: vulkan, context: 262144 }
+        - { port: 8004, device: 3, api: vulkan, context: 262144 }
+
+    - name: Reload systemd to pick up the new units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start llama-server instances (start on VM boot, restart on crash)
+      ansible.builtin.systemd:
+        name: "llama-server-{{ item.port }}"
+        state: started
+        enabled: true
+      loop:
+        - { port: 8001 }
+        - { port: 8002 }
+        - { port: 8003 }
+        - { port: 8004 }
+
+    - name: Wait for all 4 llama-server ports to come up
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        timeout: 900
+      loop: [8001, 8002, 8003, 8004]
+
+    - name: Verify each server answers /health
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item }}/health"
+        status_code: 200
+        timeout: 10
+      register: llama_health
+      until: llama_health.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+      loop: [8001, 8002, 8003, 8004]
 
   handlers:
     - name: reload udev

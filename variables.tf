@@ -23,6 +23,16 @@ variable "os_ssd_slow" {
   default = "os-ssd-slow"
 }
 
+variable "ssh_private_key_file" {
+  type        = string
+  description = "Path to the SSH private key Ansible uses to connect to the VMs"
+}
+
+variable "jenkins_agent_ssh_private_key_file" {
+  type        = string
+  description = "Path to the SSH private key for the jenkins-agent VM (its cloud-init installs the jenkins-agent key, not the shared one)"
+}
+
 variable "hf_token" {
   type = string
 }

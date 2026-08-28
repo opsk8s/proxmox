@@ -5,9 +5,9 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    # terraform passes the value via local-exec environment
-    jenkins_admin_password: "{{ lookup('env', 'JENKINS_ADMIN_PASSWORD') }}"
-    jenkins_admin_email: "{{ lookup('env', 'JENKINS_ADMIN_EMAIL') }}"
+    # terraform passes the values via ansible_playbook_run extra_vars
+    jenkins_admin_password: ""
+    jenkins_admin_email: ""
     jenkins_home: /var/lib/jenkins
     jenkins_user_home: "{{ jenkins_home }}"
     jenkins_http_protocol: http
@@ -68,8 +68,8 @@
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
-        timeout: 300
-        delay: 10
+        timeout: 150
+        delay: 5
         sleep: 5
 
     - name: Wait for cloud-init to finish
@@ -82,9 +82,9 @@
     - name: Gather facts
       ansible.builtin.setup:
 
-    - name: Fail early when JENKINS_ADMIN_PASSWORD is not provided
+    - name: Fail early when jenkins_admin_password is not provided
       ansible.builtin.fail:
-        msg: "Set the JENKINS_ADMIN_PASSWORD environment variable (terraform passes it via local-exec)"
+        msg: "Pass jenkins_admin_password via the ansible_playbook_run extra_vars in Terraform"
       when: jenkins_admin_password | length == 0
 
     - name: Fail early when the agent SSH private key is empty

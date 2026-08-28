@@ -9,7 +9,7 @@ resource "proxmox_virtual_environment_file" "jenkins_config" {
   node_name    = var.main_node
 
   source_raw {
-    data = templatefile("${path.module}/jenkins-config.yaml", {
+    data = templatefile("${path.module}/cloud-init.yaml", {
       jenkins_public_key = trimspace(var.ssh_public_key)
     })
     file_name = "jenkins-config.yaml"
@@ -66,23 +66,23 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
   depends_on = [
     proxmox_virtual_environment_file.jenkins_config
   ]
-}
 
-resource "null_resource" "configure_jenkins" {
-  triggers = {
-    vm_id    = proxmox_virtual_environment_vm.jenkins_vm.id
-    playbook = filesha256("${path.module}/jenkins.yml")
-  }
-
-  provisioner "local-exec" {
-    command = "ansible-playbook -i ${path.module}/inventory.ini ${path.module}/jenkins.yml"
-    environment = {
-      # read by the playbook via lookup('env', 'JENKINS_ADMIN_PASSWORD')
-      JENKINS_ADMIN_PASSWORD = var.jenkins_admin_password
+  lifecycle {
+    action_trigger {
+      events     = [after_create, after_update]
+      actions    = [action.ansible_playbook_run.configure_jenkins]
+      on_failure = halt
     }
   }
+}
 
-  depends_on = [
-    proxmox_virtual_environment_vm.jenkins_vm
-  ]
+action "ansible_playbook_run" "configure_jenkins" {
+  config {
+    playbooks        = ["${path.module}/ansible.yml"]
+    inventory_files  = ["${path.module}/inventory.ini"]
+    private_key_file = var.ssh_private_key_file
+    extra_vars = {
+      jenkins_admin_password = var.jenkins_admin_password
+    }
+  }
 }

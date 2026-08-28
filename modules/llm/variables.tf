@@ -25,3 +25,7 @@ variable "ssh_public_key" {
 variable "hf_token" {
   type = string
 }
+
+variable "ssh_private_key_file" {
+  type = string
+}
