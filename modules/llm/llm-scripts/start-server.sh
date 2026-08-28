@@ -310,6 +310,7 @@ LLAMA_CMD+=(
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
     --load-mode mmap
+    --cont-batching
     --metrics
 )
 
