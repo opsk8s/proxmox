@@ -20,11 +20,12 @@ SPLIT_MODE="layer"
 
 # Derive MODEL_QUANT and KV_CACHE_TYPE from the QUANT selector
 case "$QUANT" in
+    IQ4)   MODEL_QUANT="IQ4_XS"; KV_CACHE_TYPE="q4_0" ;;
     Q4)   MODEL_QUANT="Q4_K_XL"; KV_CACHE_TYPE="q4_0" ;;
     Q6)   MODEL_QUANT="Q6_K_XL"; KV_CACHE_TYPE="q8_0" ;;
     Q8)   MODEL_QUANT="Q8_K_XL"; KV_CACHE_TYPE="q8_0" ;;
     BF16) MODEL_QUANT="BF16";    KV_CACHE_TYPE="f16"  ;;
-    *)    echo "❌ Error: invalid QUANT '$QUANT' (expected Q4, Q6, Q8, or BF16)"; exit 1 ;;
+    *)    echo "❌ Error: invalid QUANT '$QUANT' (expected IQ4, Q4, Q6, Q8, or BF16)"; exit 1 ;;
 esac
 
 MODELS_HOME="/mnt/models"
@@ -307,7 +308,6 @@ LLAMA_CMD+=(
     --cache-type-v "$KV_CACHE_TYPE"
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
-    --load-mode mmap
     --metrics
 )
 

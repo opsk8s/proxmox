@@ -45,7 +45,8 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   }
 
   memory {
-    dedicated = 65536
+   # dedicated = 65536
+    dedicated = 131072
   }
 
   disk {

@@ -289,23 +289,6 @@
       register: hf_token_result
       changed_when: false
 #
-#    - name: Download Qwen3.8 Q8 model via wget
-#      ansible.builtin.shell: |
-#        # Define the direct URL for the specific GGUF file
-#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-#
-#        # Download using wget with Authorization header
-#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-#             -O "${OUTPUT_FILE}" \
-#             "${MODEL_URL}"
-#      args:
-#        executable: /bin/bash
-#        # Idempotency: Only run if the file does NOT exist
-#        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
-#      become: true
-#      become_user: llm
-#
     - name: Download Qwen3.8 Q4 model via wget
       ansible.builtin.shell: |
         # Define the direct URL for the specific GGUF file
@@ -323,52 +306,69 @@
       become: true
       become_user: llm
 #
-#    - name: Download Qwen3.8 Q6 model via wget
-#      ansible.builtin.shell: |
-#        # Define the direct URL for the specific GGUF file
-#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+    - name: Download Qwen3.8 Q6 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
+      become: true
+      become_user: llm
 #
-#        # Download using wget with Authorization header
-#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-#             -O "${OUTPUT_FILE}" \
-#             "${MODEL_URL}"
-#      args:
-#        executable: /bin/bash
-#        # Idempotency: Only run if the file does NOT exist
-#        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
-#      become: true
-#      become_user: llm
+    - name: Download Qwen3.8 Q8 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+      become: true
+      become_user: llm
 #
-#    - name: Download Qwen3.8-Flash Q4 model via wget (all 4 chunks)
-#      ansible.builtin.shell: |
-#        set -euo pipefail
-#
-#        BASE="https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/UD-Q4_K_XL/Qwen3.8-Flash-Next-UD-Q4_K_XL"
-#        DIR="/mnt/models"
-#
-#        for i in 1 2 3 4; do
-#          PART=$(printf '%05d' "$i")
-#          OUTPUT_FILE="${DIR}/Qwen3.8-Flash-Next-UD-Q4_K_XL-${PART}-of-00004.gguf"
-#
-#          # Idempotency: skip chunks that already exist
-#          if [ -f "${OUTPUT_FILE}" ]; then
-#            echo "exists, skipping: ${OUTPUT_FILE}"
-#            continue
-#          fi
-#
-#          echo "downloading: ${OUTPUT_FILE}"
-#          wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-#               -O "${OUTPUT_FILE}" \
-#               "${BASE}-${PART}-of-00004.gguf"
-#        done
-#
-#        /home/llm/llama.cpp/build-vulkan/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-Q4_K_XL-00001-of-00004.gguf /mnt/models/Qwen3.8-Flash-Next-UD-Q4_K_XL.gguf
-#      args:
-#        executable: /bin/bash
-#        creates: /mnt/models/Qwen3.8-Flash-Next-UD-Q4_K_XL.gguf
-#      become: true
-#      become_user: llm
+    - name: Download Qwen3.8-Flash Q4 model via wget (all chunks)
+      ansible.builtin.shell: |
+        set -euo pipefail
+
+        BASE="https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/UD-IQ4_XS/Qwen3.8-Flash-Next-UD-IQ4_XS"
+        DIR="/mnt/models"
+
+        for i in 1 2 3; do
+          PART=$(printf '%05d' "$i")
+          OUTPUT_FILE="${DIR}/Qwen3.8-Flash-Next-UD-IQ4_XS-${PART}-of-00003.gguf"
+
+          # Idempotency: skip chunks that already exist
+          if [ -f "${OUTPUT_FILE}" ]; then
+            echo "exists, skipping: ${OUTPUT_FILE}"
+            continue
+          fi
+
+          echo "downloading: ${OUTPUT_FILE}"
+          wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+               -O "${OUTPUT_FILE}" \
+               "${BASE}-${PART}-of-00003.gguf"
+        done
+
+        /home/llm/llama.cpp/build-vulkan/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
+      args:
+        executable: /bin/bash
+        creates: /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
+      become: true
+      become_user: llm
 #
     - name: Download Qwen3.8 Vision model via wget
       ansible.builtin.shell: |
