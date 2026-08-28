@@ -3,7 +3,7 @@
 # ==============================================================================
 # Configuration & Defaults
 # ==============================================================================
-
+export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
 
 # Parameterizable defaults (can be overridden via command-line arguments)
 
@@ -118,6 +118,10 @@ usage() {
     echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo "  # Run Q4 (Q4_K_XL model, q4_0 KV cache) on a single device at ports 8001-8004"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
     echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
     echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
     echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
@@ -184,7 +188,7 @@ if [[ "$API" == "rocm" ]]; then
     LLAMA_CMD+=(
         env
         GGML_HIP=1
-        HSA_OVERRIDE_GFX_VERSION=12.0.1
+        HSA_OVERRIDE_GFX_VERSION="12.0.1"
         GGML_VK_DISABLE=1
         HIP_VISIBLE_DEVICES="$DEVICE_ID"
         "$LLAMA_BIN"
@@ -194,12 +198,9 @@ elif [[ "$API" == "vulkan" ]]; then
     ROCM_DEVICES=$(generate_vulkan_devices "$DEVICE_ID")
     LLAMA_CMD+=(
         env
-        RADV_PERFTERMS="compute"
-        RADV_DEBUG="nocng,nodcc"
-	      RADV_PERFTEST="nogttspill"
         DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
         GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1
-        HSA_OVERRIDE_GFX_VERSION=1201
+        HSA_OVERRIDE_GFX_VERSION="12.0.1"
         MALLOC_TRIM_THRESHOLD_=-1
         "$LLAMA_BIN"
         --device "$ROCM_DEVICES"
@@ -221,7 +222,7 @@ if [[ "$MTP" == "mtp" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 3
+      --spec-draft-n-max 4
     )
 elif [[ "$MTP" == "mtp-vision" ]]; then
     LLAMA_CMD+=(
@@ -230,7 +231,7 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 3
+      --spec-draft-n-max 4
     )
 elif [[ "$MTP" == "dspark" ]]; then
     LLAMA_CMD+=(
@@ -308,6 +309,7 @@ LLAMA_CMD+=(
     --cache-type-v "$KV_CACHE_TYPE"
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
+    --load-mode mmap
     --metrics
 )
 
@@ -318,7 +320,7 @@ LLAMA_CMD+=(
 
 echo "🚀 Starting llama-server..."
 echo "   RAW_IDS      : $DEVICE_ID"
-echo "   ROCM_DEVICES : $ROCM_DEVICES"
+echo "   DEVICES      : $ROCM_DEVICES"
 echo "   Vision file  : $MMPROJ_FILE"
 echo "   Model        : $MODEL_FILE"
 echo "   Port         : $PORT"
