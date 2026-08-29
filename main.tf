@@ -88,6 +88,19 @@ module "postgres" {
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
 
+module "monitoring" {
+  source                 = "./modules/monitoring"
+  main_node              = var.main_node
+  backup_dir             = var.backup_dir
+  vm_dir                 = var.vm_dir
+  ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key         = trimspace(data.local_file.public_key.content)
+  grafana_admin_password = var.grafana_admin_password
+  ssh_private_key_file   = var.ssh_private_key_file
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
 #  zpool import -f os-ssd-fast
 #  zpool import -f os-ssd-slow
 #  zpool import -f backup-slow

@@ -57,11 +57,3 @@ variable "grafana_admin_password" {
   description = "Grafana admin password"
 }
 
-variable "ct_template_file_id" {
-  type        = string
-  description = "File ID of an existing Ubuntu OS template (vztmpl) for the monitoring LXC, e.g. 'backup-slow-dir:vztmpl/ubuntu-26.04-....vztmpl'. List templates with 'pveam list' on the PVE host (or GUI: Datacenter -> Storage -> <store> -> Content -> Template OS)."
-  validation {
-    condition     = length(var.ct_template_file_id) > 0
-    error_message = "Set ct_template_file_id in proxmox.tfvars to an existing vztmpl (find one with 'pveam list' on the PVE host). The Proxmox template mirror is subscription-gated, so it must already be on the server."
-  }
-}

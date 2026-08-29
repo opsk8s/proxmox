@@ -1,0 +1,321 @@
+---
+# vllm-rocm-uv.yml
+#
+# Ubuntu 24.04
+# Python 3.14
+# ROCm 10.0
+# PyTorch ROCm
+# flash-attn
+# amd-aiter
+# vLLM 0.27.0
+#
+# Python/venv/package management: uv
+
+- name: Install vLLM ROCm stack with uv
+  hosts: llm
+  become: true
+
+  vars:
+    vllm_user: "llm"
+    vllm_home: "/home/llm"
+    vllm_venv: "/home/llm/.vllm"
+
+    python_version: "3.14"
+
+    rocm_version: "10.0.0"
+
+    vllm_version: "0.27.0"
+    pytorch_version: "2.12.0"
+    torchvision_version: "0.27.0"
+    torchaudio_version: "2.11.0"
+
+    flash_attn_version: "2.8.3"
+    aiter_version: "0.1.20.post1"
+
+    # Change this according to the GPU.
+    #
+    # MI300X:
+    #   device-gfx942
+    #
+    # MI350X / MI355X:
+    #   device-gfx950
+    #
+    rocm_device: "device-all"
+
+    rocm_wheel_index: "https://stable.repo.amd.com/rocm/whl-next/"
+    vllm_wheel_index: "https://rocm.frameworks.amd.com/whl-multi-arch/vllm/"
+
+    uv_bin: "/usr/local/bin/uv"
+
+  tasks:
+
+    #####################################################################
+    # Base OS
+    #####################################################################
+
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install system dependencies
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - wget
+          - git
+          - build-essential
+          - gcc
+          - g++
+          - make
+          - cmake
+          - ninja-build
+          - pkg-config
+          - libnuma1
+          - libnuma-dev
+          - libsndfile1
+          - libgl1
+          - libglib2.0-0
+          - libstdc++6
+        state: present
+
+    #####################################################################
+    # Create vLLM folder
+    #####################################################################
+
+    - name: Create vLLM directory
+      ansible.builtin.file:
+        path: "{{ vllm_home }}"
+        state: directory
+        owner: "{{ vllm_user }}"
+        group: "{{ vllm_user }}"
+        mode: "0755"
+
+    #####################################################################
+    # Install uv
+    #####################################################################
+
+    - name: Check installed uv
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} --version"
+      register: uv_check
+      changed_when: false
+      failed_when: false
+
+    - name: Install uv
+      ansible.builtin.shell:
+        cmd: |
+          curl -LsSf https://astral.sh/uv/install.sh | \
+            env UV_INSTALL_DIR=/usr/local/bin \
+            UV_NO_MODIFY_PATH=1 \
+            sh
+      args:
+        executable: /bin/bash
+      when: uv_check.rc != 0
+
+    - name: Verify uv
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} --version"
+      register: uv_version
+      changed_when: false
+
+    #####################################################################
+    # Install Python 3.14 using uv
+    #####################################################################
+
+    - name: Install Python 3.14 with uv
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          python install {{ python_version }}
+      environment:
+        UV_PYTHON_INSTALL_DIR: "{{ vllm_home }}/python"
+      register: python_install
+      changed_when: "'already installed' not in python_install.stdout"
+
+    #####################################################################
+    # Create virtual environment
+    #####################################################################
+
+    - name: Create Python 3.14 virtual environment
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          venv
+          --python 3.14
+          {{ vllm_venv }}
+      args:
+        creates: "{{ vllm_venv }}/bin/python"
+
+    #####################################################################
+    # Upgrade packaging tools
+    #####################################################################
+
+    - name: Install pip/setuptools/wheel
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --upgrade
+          pip
+          setuptools
+          wheel
+
+    #####################################################################
+    # ROCm Python packages
+    #####################################################################
+
+    - name: Install ROCm Python packages
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --index-url {{ rocm_wheel_index }}
+          "rocm[libraries,{{ rocm_device }}]=={{ rocm_version }}"
+
+    #####################################################################
+    # PyTorch
+    #####################################################################
+
+    - name: Install PyTorch ROCm
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --index-url {{ rocm_wheel_index }}
+          "torch[{{ rocm_device }}]=={{ pytorch_version }}+rocm{{ rocm_version }}"
+          "torchvision[{{ rocm_device }}]=={{ torchvision_version }}+rocm{{ rocm_version }}"
+          "torchaudio=={{ torchaudio_version }}+rocm{{ rocm_version }}"
+
+    #####################################################################
+    # Flash Attention
+    #####################################################################
+
+    - name: Install Flash Attention
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --extra-index-url {{ vllm_wheel_index }}
+          "flash-attn=={{ flash_attn_version }}"
+
+    #####################################################################
+    # AMD AITER
+    #####################################################################
+
+    - name: Install AMD AITER
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --extra-index-url {{ vllm_wheel_index }}
+          "amd-aiter=={{ aiter_version }}"
+
+    #####################################################################
+    # vLLM
+    #####################################################################
+
+    - name: Install vLLM
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ uv_bin }}
+          pip install
+          --python {{ vllm_venv }}/bin/python
+          --extra-index-url {{ vllm_wheel_index }}
+          "vllm=={{ vllm_version }}"
+
+    #####################################################################
+    # Environment
+    #####################################################################
+
+    - name: Configure vLLM environment
+      ansible.builtin.copy:
+        dest: /etc/profile.d/vllm-rocm.sh
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          export VLLM_HOME={{ vllm_home }}
+          export VLLM_VENV={{ vllm_venv }}
+
+          export PATH={{ vllm_venv }}/bin:$PATH
+
+          export ROCM_HOME=/opt/rocm
+
+          export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE
+
+    #####################################################################
+    # Add vLLM user to GPU groups
+    #####################################################################
+
+    - name: Add vLLM user to video group
+      ansible.builtin.user:
+        name: "{{ vllm_user }}"
+        groups: video
+        append: true
+      failed_when: false
+
+    - name: Add vLLM user to render group
+      ansible.builtin.user:
+        name: "{{ vllm_user }}"
+        groups: render
+        append: true
+      failed_when: false
+
+    #####################################################################
+    # Verification
+    #####################################################################
+
+    - name: Check Python
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: "{{ vllm_venv }}/bin/python --version"
+      register: python_check
+      changed_when: false
+
+    - name: Check PyTorch
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ vllm_venv }}/bin/python -c
+          "import torch;
+          print('PyTorch:', torch.__version__);
+          print('HIP:', torch.version.hip);
+          print('CUDA available:', torch.cuda.is_available());
+          print('GPU count:', torch.cuda.device_count());
+          [print(i, torch.cuda.get_device_name(i))
+           for i in range(torch.cuda.device_count())]"
+      register: torch_check
+      changed_when: false
+
+    - name: Check vLLM
+      become_user: "{{ vllm_user }}"
+      ansible.builtin.command:
+        cmd: >
+          {{ vllm_venv }}/bin/python -c
+          "import vllm;
+          print('vLLM:', vllm.__version__)"
+      register: vllm_check
+      changed_when: false
+
+    - name: Show installation result
+      ansible.builtin.debug:
+        msg:
+          - "{{ uv_version.stdout }}"
+          - "{{ python_check.stdout }}"
+          - "{{ torch_check.stdout_lines }}"
+          - "{{ vllm_check.stdout }}"

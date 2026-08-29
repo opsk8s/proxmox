@@ -535,14 +535,45 @@
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: rocm, context: 262144 }
-        - { port: 8002, device: 1, api: rocm, context: 262144 }
-        - { port: 8003, device: 2, api: rocm, context: 262144 }
-        - { port: 8004, device: 3, api: rocm, context: 262144 }
+        - { port: 8001, device: 0, api: vulkan, context: 262144 }
+        - { port: 8002, device: 1, api: vulkan, context: 262144 }
+        - { port: 8003, device: 2, api: vulkan, context: 262144 }
+        - { port: 8004, device: 3, api: vulkan, context: 262144 }
+
+    # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
+    # resets them), so pin them with a oneshot unit that runs on every boot,
+    # ordered before the llama-server units. /usr/bin/amd-smi is used because
+    # systemd does not load /etc/profile.d.
+    - name: Deploy AMD GPU profile unit (COMPUTE profile + HIGH perf level at every boot)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/amd-gpu-profile.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=AMD GPU profile (COMPUTE power profile, HIGH perf level) on all GPUs
+          After=systemd-modules-load.service
+          Before=llama-server-*.service
+
+          [Service]
+          Type=oneshot
+          RemainAfterExit=yes
+          ExecStart=/usr/bin/amd-smi set -g 0 1 2 3 -P COMPUTE
+          ExecStart=/usr/bin/amd-smi set -g 0 1 2 3 -l HIGH
+
+          [Install]
+          WantedBy=multi-user.target
 
     - name: Reload systemd to pick up the new units
       ansible.builtin.systemd:
         daemon_reload: true
+
+    - name: Enable AMD GPU profile unit (runs on every VM boot)
+      ansible.builtin.systemd:
+        name: amd-gpu-profile
+        state: started
+        enabled: true
 
     - name: Enable and start llama-server instances (start on VM boot, restart on crash)
       ansible.builtin.systemd:

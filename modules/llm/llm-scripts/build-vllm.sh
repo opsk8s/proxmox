@@ -8,6 +8,7 @@ echo 'export FLASH_ATTENTION_TRITON_AMD_ENABLE=TRUE' >> $HOME/.vllm/bin/activate
 source $HOME/.vllm/bin/activate
 
 uv pip install ninja cmake wheel pybind11 flydsl
+uv pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "rocm[libraries,device-gfx1201]==10.0.0"
 uv pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ \
        "torch[device-gfx1201]==2.12.0+rocm10.0.0" \
        "torchvision[device-gfx1201]==0.27.0+rocm10.0.0" \

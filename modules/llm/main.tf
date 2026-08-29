@@ -45,8 +45,8 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   }
 
   memory {
-   dedicated = 65536
-   # dedicated = 131072
+    dedicated = 65536
+    # dedicated = 131072
   }
 
   disk {
@@ -123,10 +123,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 }
 
 
-# AMD
-# sudo amd-smi set -g 0 1 2 3 -P COMPUTE
-# sudo amd-smi set -o 300
-# sudo amd-smi set -g 0 1 2 3 -l HIGH
+# AMD GPU profiles (-P COMPUTE, -l HIGH) are applied on every boot by
+# amd-gpu-profile.service (deployed by ansible.yml, ordered before the
+# llama-server units) — no manual action needed.
+# Manual power cap (not applied on boot): sudo amd-smi set -o 300
 action "ansible_playbook_run" "configure_llm" {
   config {
     playbooks        = ["${path.module}/ansible.yml"]

@@ -1,0 +1,13 @@
+#cloud-config
+hostname: monitoring
+timezone: Europe/Zurich
+users:
+  - name: monitoring
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${monitoring_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server
