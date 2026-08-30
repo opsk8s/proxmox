@@ -171,6 +171,7 @@
           export HIP_CLANG_PATH="$ROCM_PATH/llvm/bin"
           export HIP_PLATFORM=amd
           export PATH="$ROCM_PATH/bin:$ROCM_PATH/llvm/bin:$PATH"
+          export LD_LIBRARY_PATH="$ROCM_PATH/core-10.0/lib:$LD_LIBRARY_PATH"
           export PYTORCH_ROCM_ARCH="gfx1201"
           export HIP_ARCHITECTURES="gfx1201"
           export GPU_TARGETS="gfx1201"
@@ -306,39 +307,39 @@
       become: true
       become_user: llm
 #
-#    - name: Download Qwen3.8 Q6 model via wget
-#      ansible.builtin.shell: |
-#        # Define the direct URL for the specific GGUF file
-#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+    - name: Download Qwen3.8 Q6 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
+      become: true
+      become_user: llm
 #
-#        # Download using wget with Authorization header
-#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-#             -O "${OUTPUT_FILE}" \
-#             "${MODEL_URL}"
-#      args:
-#        executable: /bin/bash
-#        # Idempotency: Only run if the file does NOT exist
-#        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
-#      become: true
-#      become_user: llm
-#
-#    - name: Download Qwen3.8 Q8 model via wget
-#      ansible.builtin.shell: |
-#        # Define the direct URL for the specific GGUF file
-#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-#
-#        # Download using wget with Authorization header
-#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-#             -O "${OUTPUT_FILE}" \
-#             "${MODEL_URL}"
-#      args:
-#        executable: /bin/bash
-#        # Idempotency: Only run if the file does NOT exist
-#        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
-#      become: true
-#      become_user: llm
+    - name: Download Qwen3.8 Q8 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+      become: true
+      become_user: llm
 #
 #    - name: Download Qwen3.8-Flash Q4 model via wget (all chunks)
 #      ansible.builtin.shell: |
@@ -370,6 +371,7 @@
 #      become: true
 #      become_user: llm
 #
+
     - name: Download Qwen3.8 Vision model via wget
       ansible.builtin.shell: |
         # Ensure target directory exists
@@ -409,8 +411,8 @@
               least_conn;
               server 127.0.0.1:8001 max_fails=3 fail_timeout=30s;
               server 127.0.0.1:8002 max_fails=3 fail_timeout=30s;
-              server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
-              server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
+              # server 127.0.0.1:8003 max_fails=3 fail_timeout=30s;
+              # server 127.0.0.1:8004 max_fails=3 fail_timeout=30s;
               keepalive 16;
           }
 
@@ -528,17 +530,15 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q8 thinking mtp-vision -np 1
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: vulkan, context: 262144 }
-        - { port: 8002, device: 1, api: vulkan, context: 262144 }
-        - { port: 8003, device: 2, api: vulkan, context: 262144 }
-        - { port: 8004, device: 3, api: vulkan, context: 262144 }
+        - { port: 8001, device: "0,1", api: rocm, context: 262144 }
+        - { port: 8002, device: "2,3", api: rocm, context: 262144 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
@@ -583,15 +583,13 @@
       loop:
         - { port: 8001 }
         - { port: 8002 }
-        - { port: 8003 }
-        - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -603,7 +601,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002]
 
   handlers:
     - name: reload udev

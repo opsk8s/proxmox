@@ -34,9 +34,11 @@ LLAMA_BIN="$HOME/llama.cpp/build-${API}/bin/llama-server"
 shopt -s nullglob
 MODEL_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-${MODEL_QUANT}.gguf )
 MMPROJ_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-mmproj*.gguf )
+DFLASH_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-dflash*.gguf )
 shopt -u nullglob
 MODEL_FILE="${MODEL_MATCHES[0]:-}"
 MMPROJ_FILE="${MMPROJ_MATCHES[0]:-}"
+DFLASH_FILE="${DFLASH_MATCHES[0]:-}"
 LOG_FILE="$HOME/logs/llama_server_port_${PORT}.log"
 PID_FILE="$HOME/logs/llama_server_port_${PORT}.pid"
 
@@ -198,6 +200,9 @@ elif [[ "$API" == "vulkan" ]]; then
     ROCM_DEVICES=$(generate_vulkan_devices "$DEVICE_ID")
     LLAMA_CMD+=(
         env
+        RADV_PERFTERMS="compute"
+        RADV_DEBUG="nocng,nodcc"
+        RADV_PERFTEST="nogttspill"
         DISABLE_LAYER_AMD_SWITCHABLE_GRAPHICS_1=1
         GGML_VK_DISABLE_HOST_VISIBLE_VIDMEM=1
         HSA_OVERRIDE_GFX_VERSION="12.0.1"
@@ -233,24 +238,9 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --spec-type draft-mtp
       --spec-draft-n-max 4
     )
-elif [[ "$MTP" == "dspark" ]]; then
-    LLAMA_CMD+=(
-      --cache-type-k-draft "$KV_CACHE_TYPE"
-      --cache-type-v-draft "$KV_CACHE_TYPE"
-      --spec-type draft-dspark
-      --spec-draft-n-max 15
-    )
-elif [[ "$MTP" == "dspark-vision" ]]; then
-    LLAMA_CMD+=(
-      --mmproj "$MMPROJ_FILE"
-      --image-min-tokens 1024
-      --cache-type-k-draft "$KV_CACHE_TYPE"
-      --cache-type-v-draft "$KV_CACHE_TYPE"
-      --spec-type draft-dspark
-      --spec-draft-n-max 7
-    )
 elif [[ "$MTP" == "dflash" ]]; then
     LLAMA_CMD+=(
+      --model-draft "$DFLASH_FILE"
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-dflash
@@ -258,6 +248,7 @@ elif [[ "$MTP" == "dflash" ]]; then
     )
 elif [[ "$MTP" == "dflash-vision" ]]; then
     LLAMA_CMD+=(
+      --model-draft "$DFLASH_FILE"
       --mmproj "$MMPROJ_FILE"
       --image-min-tokens 1024
       --cache-type-k-draft "$KV_CACHE_TYPE"
@@ -309,6 +300,8 @@ LLAMA_CMD+=(
     --cache-type-v "$KV_CACHE_TYPE"
     --split-mode "$SPLIT_MODE"
     --flash-attn auto
+    --n-gpu-layers 999
+    --n-gpu-layers-draft 999
     --load-mode mmap
     --cont-batching
     --metrics
