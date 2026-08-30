@@ -22,6 +22,14 @@ variable "postgres_password" {
   type = string
 }
 
+variable "smartshift_admin_password" {
+  type = string
+}
+
+variable "analytics_ro_password" {
+  type = string
+}
+
 variable "ssh_private_key_file" {
   type = string
 }

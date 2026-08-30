@@ -5,8 +5,11 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    # terraform passes the value via ansible_playbook_run extra_vars
+    # terraform passes the values via ansible_playbook_run extra_vars
+    # (make deploy-postgres does the same — see the Makefile)
     postgres_password: ""
+    smartshift_admin_password: ""
+    analytics_ro_password: ""
     lan_subnet: 192.168.51.0/24
     pg_port: 5432
 
@@ -38,6 +41,8 @@
         name:
           - postgresql
           - postgresql-contrib
+          # Python driver for the community.postgresql db provisioning tasks
+          - python3-psycopg2
         state: present
 
     - name: Detect installed PostgreSQL major version
@@ -92,3 +97,61 @@
         host: 127.0.0.1
         port: "{{ pg_port }}"
         timeout: 120
+
+    # --- Databases (declarative, from database.yaml) --------------------------
+    # The template lookup renders {{ *_password }} in database.yaml from the
+    # extra_vars Terraform passes (values live in proxmox.tfvars).
+    - name: Load database definitions
+      ansible.builtin.set_fact:
+        db_definitions: "{{ (lookup('ansible.builtin.template', 'database.yaml') | from_yaml).databases }}"
+
+    - name: Fail early when a database password is not provided
+      ansible.builtin.fail:
+        msg: "Set the password for {{ item.user }} in proxmox.tfvars (see extra_vars in modules/postgres/main.tf)"
+      when: item.password | length == 0
+      loop: "{{ db_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Ensure databases exist
+      community.postgresql.postgresql_db:
+        name: "{{ item.name }}"
+        encoding: UTF8
+        state: present
+      become_user: postgres
+      loop: "{{ db_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Ensure database users exist
+      community.postgresql.postgresql_user:
+        name: "{{ item.user }}"
+        password: "{{ item.password }}"
+        state: present
+      become_user: postgres
+      loop: "{{ db_definitions }}"
+      loop_control:
+        label: "{{ item.user }}"
+
+    - name: Grant database permissions
+      community.postgresql.postgresql_privs:
+        login_db: "{{ item.name }}"
+        roles: "{{ item.user }}"
+        type: database
+        privs: "{{ item.permissions | join(',') }}"
+        state: present
+      become_user: postgres
+      loop: "{{ db_definitions }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Ensure database schemas exist (owner defaults to the database user)
+      community.postgresql.postgresql_schema:
+        login_db: "{{ item.0.name }}"
+        name: "{{ item.1.name }}"
+        owner: "{{ item.1.owner | default(item.0.user, true) }}"
+        state: present
+      become_user: postgres
+      loop: "{{ db_definitions | subelements('schemas', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }}.{{ item.1.name }}"

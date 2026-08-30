@@ -1,0 +1,33 @@
+# Declarative database provisioning for the postgres VM (applied idempotently
+# on every playbook run — see the "Databases" section in ansible.yml).
+#
+# Each entry provisions:
+#   name        database name
+#   user        login role for the application
+#   password    Jinja variable passed from proxmox.tfvars (root variables.tf
+#               -> module "postgres" -> extra_vars in modules/postgres/main.tf)
+#   permissions database-level privileges: ALL | CONNECT | CREATE | TEMPORARY
+#   schemas     nested schemas; `owner` is optional and defaults to `user`
+#
+# Adding a database: add an entry here, declare its password variable in the
+# root variables.tf + pass it through the module, set it in proxmox.tfvars.
+
+databases:
+  # Example 1: application admin — full control of its own database.
+  - name: smartshift
+    user: smartshift_admin
+    password: "{{ smartshift_admin_password }}"
+    permissions: [ALL]
+    schemas:
+      - name: public
+        owner: smartshift_admin
+      - name: app
+        owner: smartshift_admin
+
+  # Example 2: read-only analytics — connect only, no CREATE/TEMP grants.
+  - name: smartshift_analytics
+    user: analytics_ro
+    password: "{{ analytics_ro_password }}"
+    permissions: [CONNECT, TEMPORARY]
+    schemas:
+      - name: ro

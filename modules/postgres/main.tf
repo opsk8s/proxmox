@@ -77,7 +77,9 @@ action "ansible_playbook_run" "configure_postgres" {
     inventory_files  = ["${path.module}/inventory.ini"]
     private_key_file = var.ssh_private_key_file
     extra_vars = {
-      postgres_password = var.postgres_password
+      postgres_password         = var.postgres_password
+      smartshift_admin_password = var.smartshift_admin_password
+      analytics_ro_password     = var.analytics_ro_password
     }
   }
 }

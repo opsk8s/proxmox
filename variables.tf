@@ -52,6 +52,16 @@ variable "postgres_password" {
   description = "PostgreSQL superuser password"
 }
 
+variable "smartshift_admin_password" {
+  type        = string
+  description = "Password for the smartshift_admin role (see modules/postgres/database.yaml)"
+}
+
+variable "analytics_ro_password" {
+  type        = string
+  description = "Password for the analytics_ro role (see modules/postgres/database.yaml)"
+}
+
 variable "grafana_admin_password" {
   type        = string
   description = "Grafana admin password"

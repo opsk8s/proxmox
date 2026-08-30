@@ -27,7 +27,9 @@ deploy-open-webui:
 
 deploy-postgres:
 	$(ANSIBLE_PLAYBOOK) -i modules/postgres/inventory.ini modules/postgres/ansible.yml \
-		--extra-vars "postgres_password=$(call tfvar,postgres_password)"
+		--extra-vars "postgres_password=$(call tfvar,postgres_password) \
+		smartshift_admin_password=$(call tfvar,smartshift_admin_password) \
+		analytics_ro_password=$(call tfvar,analytics_ro_password)"
 
 # Monitoring VM (Prometheus + Grafana + blackbox). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
