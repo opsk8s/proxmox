@@ -227,7 +227,7 @@ if [[ "$MTP" == "mtp" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 4
+      --spec-draft-n-max 5
     )
 elif [[ "$MTP" == "mtp-vision" ]]; then
     LLAMA_CMD+=(
@@ -236,7 +236,7 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 4
+      --spec-draft-n-max 5
     )
 elif [[ "$MTP" == "dflash" ]]; then
     LLAMA_CMD+=(
@@ -302,7 +302,9 @@ LLAMA_CMD+=(
     --flash-attn auto
     --n-gpu-layers 999
     --n-gpu-layers-draft 999
-    --load-mode mmap
+    --cache-ram 8192
+    --cache-reuse 4096
+    --load-mode dio
     --cont-batching
     --metrics
 )

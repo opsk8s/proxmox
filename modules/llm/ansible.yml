@@ -105,6 +105,7 @@
           - amdrocm-developer-tools10.0
           - amdrocm-opencl10.0
           - build-essential
+          - ccache
           - cmake
           - git
           - pkg-config

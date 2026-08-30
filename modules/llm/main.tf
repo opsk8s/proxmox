@@ -41,12 +41,12 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   // 8 physical
   cpu {
     sockets = 1
-    cores   = 8
+    cores   = 4
   }
 
   memory {
-    dedicated = 65536
-    # dedicated = 131072
+    dedicated = 32768
+    # dedicated = 65536
   }
 
   disk {

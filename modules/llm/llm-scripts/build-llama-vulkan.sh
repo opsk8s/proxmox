@@ -10,7 +10,7 @@ echo "PULL:"
 git pull
 echo "PULL COMPLETE: ✅ "
 echo "MAKE: gfx1201"
-cmake -B build-vulkan -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1201
+cmake -B build-vulkan -DGGML_CCACHE=ON -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release -DAMDGPU_TARGETS=gfx1201
 echo "MAKE COMPLETE: ✅ "
 echo "BUILD:"
 cmake --build build-vulkan --config Release -j$(nproc)
