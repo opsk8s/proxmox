@@ -1,0 +1,207 @@
+---
+# Request-plane observability for the LLM VM (standalone, non-disruptive):
+#   1. nginx load-balancer access log in JSON (client <-> llama-server)
+#   2. Filebeat shipper for llama-server slot/timing logs + nginx JSON log
+#      into Elasticsearch on the ELK VM (192.168.51.207), indices llm-logs-*.
+#
+# The full llm playbook (ansible.yml) keeps its own copies of the nginx
+# log-format + access_log line so a future full redeploy stays consistent —
+# this play exists so observability can be rolled out WITHOUT the disruptive
+# full llm playbook run (dist-upgrade + possible driver reboot).
+#
+# Run: make deploy-llm-observability   (ELK VM must be up first)
+- name: LLM request-plane observability (nginx JSON log + Filebeat)
+  hosts: llm
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    es_host: 192.168.51.207
+
+    nginx_log_format: |
+      log_format llm_json escape=json
+        '{"timestamp":"$time_iso8601",'
+        '"remote_addr":"$remote_addr",'
+        '"x_forwarded_for":"$http_x_forwarded_for",'
+        '"method":"$request_method",'
+        '"uri":"$request_uri",'
+        '"status":$status,'
+        '"body_bytes_sent":$body_bytes_sent,'
+        '"request_length":$request_length,'
+        '"request_time":$request_time,'
+        '"upstream_addr":"$upstream_addr",'
+        '"http_user_agent":"$http_user_agent"}';
+
+    filebeat_config: |
+      filebeat.inputs:
+        # llama-server per-slot events. One event per line in the current
+        # llama.cpp master build; the D.SS.mmm.mmm clock in the lines is
+        # process-RELATIVE, so @timestamp = read time is the correct event
+        # time. logrotate(1) uses copytruncate — filestream resets its
+        # offset automatically when it detects the truncation.
+        - type: filestream
+          id: llama-server-logs
+          paths:
+            - /home/llm/logs/llama_server_port_*.log
+          fields:
+            source: llama
+          fields_under_root: true
+
+        # nginx load-balancer access log (JSON lines; client <-> llama-server
+        # interactions: which upstream handled the request, status, size, time)
+        - type: filestream
+          id: llm-proxy-access
+          paths:
+            - /var/log/nginx/llm.access.log
+          # Filebeat 9 filestream: JSON parsing is a parser, not a top-level
+          # "json" key. target:"" lifts the JSON keys to the document root.
+          parsers:
+            - ndjson:
+                target: ""
+                overwrite_keys: true
+                add_error_key: true
+          fields:
+            source: llm-proxy
+          fields_under_root: true
+
+      output.elasticsearch:
+        hosts: ["http://{{ es_host }}:9200"]
+        index: "llm-logs-%{+yyyy.MM.dd}"
+
+      # Local-only health/monitoring endpoint (checked by the playbook).
+      http:
+        host: 127.0.0.1
+        port: 5066
+
+      # Index template, ILM policy and the llama grok pipeline are owned by
+      # the ELK VM (modules/elk/ansible.yml) — Filebeat must not create its own.
+      setup:
+        template:
+          enabled: false
+        ilm:
+          enabled: false
+
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 120
+        delay: 5
+        sleep: 5
+
+    - name: Check nginx site exists (deployed by the main llm playbook)
+      ansible.builtin.stat:
+        path: /etc/nginx/sites-available/llm
+      register: llm_site
+
+    - name: Fail with guidance when the main playbook has not run yet
+      ansible.builtin.fail:
+        msg: "/etc/nginx/sites-available/llm not found — run 'make deploy-llm' first"
+      when: not llm_site.stat.exists
+
+    # --- nginx JSON access log -------------------------------------------------
+    - name: Deploy nginx JSON log format (http level)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/llm-access-json.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ nginx_log_format }}"
+
+    # Idempotent "ensure present": the full llm playbook (ansible.yml) also
+    # writes this line in its site template — lineinfile's regexp makes this
+    # a no-op when the line already exists, so neither path duplicates it.
+    - name: Enable JSON access log in the LLM site
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/sites-available/llm
+        insertafter: "server_name _;"
+        line: "              access_log /var/log/nginx/llm.access.log llm_json;"
+        regexp: "^\\s*access_log /var/log/nginx/llm\\.access\\.log llm_json;$"
+
+    - name: Test nginx configuration
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Reload nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: reloaded
+
+    # --- Filebeat ----------------------------------------------------------------
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Fetch Elastic GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
+      args:
+        creates: /etc/apt/keyrings/elasticsearch.gpg
+
+    - name: Add Elastic APT repository (9.x)
+      ansible.builtin.deb822_repository:
+        name: elastic
+        types: deb
+        uris: https://artifacts.elastic.co/packages/9.x/apt
+        suites: stable
+        components: [main]
+        signed_by: /etc/apt/keyrings/elasticsearch.gpg
+        state: present
+
+    # Hard-fail on update errors (the apt module can swallow them — see the
+    # same task in modules/elk/ansible.yml for the incident this prevents).
+    - name: Update apt cache (hard failure on error)
+      ansible.builtin.shell: apt-get update -qq
+      changed_when: false
+      register: apt_update
+      failed_when: apt_update.rc != 0
+
+    - name: Install Filebeat (9.x)
+      ansible.builtin.apt:
+        update_cache: false
+        name:
+          - filebeat=9.*
+        state: present
+
+    - name: Stop Filebeat before reconfiguring
+      ansible.builtin.systemd:
+        name: filebeat
+        state: stopped
+      failed_when: false
+
+    - name: Deploy Filebeat configuration
+      ansible.builtin.copy:
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ filebeat_config }}"
+
+    # Filebeat buffers and retries on output failure, so a late-starting ES is
+    # not fatal — but wait for it here to get a clean first run. On a fresh
+    # apply the ELK VM may still be provisioning (this play can race the
+    # module.elk action trigger), hence the long timeout.
+    - name: Wait for Elasticsearch
+      ansible.builtin.wait_for:
+        host: "{{ es_host }}"
+        port: 9200
+        timeout: 900
+
+    - name: Start and enable Filebeat
+      ansible.builtin.systemd:
+        name: filebeat
+        state: started
+        enabled: true
+
+    - name: Verify Filebeat is healthy
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5066"
+        status_code: [200, 405]
+        timeout: 10
+      register: filebeat_monitoring
+      until: filebeat_monitoring.status in [200, 405]
+      retries: 6
+      delay: 5
+      changed_when: false

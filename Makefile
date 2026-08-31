@@ -7,10 +7,16 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-exporters
+.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-exporters
 
 deploy-llm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/ansible.yml
+
+# Request-plane observability on the LLM VM (nginx JSON access log + Filebeat
+# shipper to the ELK VM). Standalone on purpose: rolls out WITHOUT the
+# disruptive full deploy-llm run. Requires the ELK VM to be up.
+deploy-llm-observability:
+	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/observability.yml
 
 deploy-vllm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/vllm.yml
@@ -36,6 +42,11 @@ deploy-postgres:
 deploy-monitoring:
 	$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini modules/monitoring/ansible.yml \
 		--extra-vars "grafana_admin_password=$(call tfvar,grafana_admin_password)"
+
+# ELK VM (Elasticsearch + Kibana, 192.168.51.207). Also runs automatically
+# via the Terraform action trigger when the VM is created or updated.
+deploy-elk:
+	$(ANSIBLE_PLAYBOOK) -i modules/elk/inventory.ini modules/elk/ansible.yml
 
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
 # Jenkins prometheus plugin). Idempotent — run after the service playbooks.

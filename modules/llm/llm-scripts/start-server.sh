@@ -305,7 +305,6 @@ LLAMA_CMD+=(
     --cache-ram 8192
     --cache-reuse 4096
     --load-mode dio
-    --cont-batching
     --metrics
 )
 

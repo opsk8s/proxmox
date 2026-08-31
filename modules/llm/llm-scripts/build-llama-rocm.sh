@@ -14,9 +14,7 @@ cmake -B build-rocm \
   -DGGML_CCACHE=ON \
   -DGGML_HIP=ON \
   -DGGML_HIP_RCCL=ON \
-  -DCMAKE_HIP_ARCHITECTURES="gfx1201" \
-  -DGGML_HIP_MMQ_MFMA=ON \
-  -DGGML_HIP_NO_VMM=ON
+  -DCMAKE_HIP_ARCHITECTURES="gfx1201"
 echo "MAKE COMPLETE: ✅ "
 echo "BUILD:"
 cmake --build build-rocm --config Release -j$(nproc)

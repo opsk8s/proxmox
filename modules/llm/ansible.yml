@@ -422,6 +422,10 @@
               listen [::]:8000 default_server;
               server_name _;
 
+              # JSON access log shipped to Elasticsearch via Filebeat
+              # (see observability.yml, which also ensures this line)
+              access_log /var/log/nginx/llm.access.log llm_json;
+
               # LLM inference is long-running (seconds to minutes)
               proxy_connect_timeout 60s;
               proxy_read_timeout 3600s;
@@ -456,6 +460,29 @@
         src: /etc/nginx/sites-available/llm
         dest: /etc/nginx/sites-enabled/llm
         state: link
+
+    # http-level log format for the JSON access log (see observability.yml —
+    # it ships these lines to Elasticsearch via Filebeat). Must exist before
+    # nginx -t below, since the site references llm_json.
+    - name: Deploy nginx JSON log format (http level)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/llm-access-json.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          log_format llm_json escape=json
+            '{"timestamp":"$time_iso8601",'
+            '"remote_addr":"$remote_addr",'
+            '"x_forwarded_for":"$http_x_forwarded_for",'
+            '"method":"$request_method",'
+            '"uri":"$request_uri",'
+            '"status":$status,'
+            '"body_bytes_sent":$body_bytes_sent,'
+            '"request_length":$request_length,'
+            '"request_time":$request_time,'
+            '"upstream_addr":"$upstream_addr",'
+            '"http_user_agent":"$http_user_agent"}';
 
     - name: Test nginx configuration
       ansible.builtin.command:
@@ -531,15 +558,17 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q8 thinking mtp-vision -np 1
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: "0,1", api: rocm, context: 262144 }
-        - { port: 8002, device: "2,3", api: rocm, context: 262144 }
+        - { port: 8001, device: 0, api: vulkan, context: 262144 }
+        - { port: 8002, device: 1, api: vulkan, context: 262144 }
+        - { port: 8003, device: 2, api: vulkan, context: 262144 }
+        - { port: 8004, device: 3, api: vulkan, context: 262144 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
@@ -584,13 +613,15 @@
       loop:
         - { port: 8001 }
         - { port: 8002 }
+        - { port: 8003 }
+        - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002]
+      loop: [8001, 8002, 8003, 8004]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -602,7 +633,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002]
+      loop: [8001, 8002, 8003, 8004]
 
   handlers:
     - name: reload udev

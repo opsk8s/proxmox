@@ -42,6 +42,8 @@
               labels: {instance_name: "open-webui"}
             - targets: ["192.168.51.205:9100"]
               labels: {instance_name: "postgres"}
+            - targets: ["192.168.51.207:9100"]
+              labels: {instance_name: "elk"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -69,6 +71,8 @@
           static_configs:
             - targets: ["http://192.168.51.204:8080/"]
               labels: {instance_name: "open-webui"}
+            - targets: ["http://192.168.51.207:9200/", "http://192.168.51.207:5601/"]
+              labels: {instance_name: "elk"}
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target

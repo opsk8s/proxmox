@@ -1,0 +1,586 @@
+---
+- name: Deploy ELK stack (Elasticsearch + Kibana) for LLM observability
+  hosts: elk
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    es_ip: 192.168.51.207
+
+    # Indices: Filebeat on the LLM VM ships into llm-logs-YYYY.MM.dd
+    # (see modules/llm/observability.yml). 14-day retention, then delete.
+    # ES 9.x: phase actions must be an OBJECT map keyed by action name — the
+    # older array ("ordered actions") form is rejected with
+    # "ordered actions are not supported".
+    ilm_policy:
+      policy:
+        phases:
+          hot:
+            min_age: 0ms
+            actions: {}
+          delete:
+            min_age: 14d
+            actions:
+              delete: {}
+
+    index_template:
+      index_patterns:
+        - llm-logs-*
+      priority: 200
+      template:
+        settings:
+          index.number_of_shards: 1
+          index.number_of_replicas: 0
+          index.lifecycle.name: llm-logs-14d
+          # every doc (llama + nginx) goes through the parser; the grok
+          # processors are guarded and no-op on non-matching lines
+          index.default_pipeline: llama-logs
+        mappings:
+          properties:
+            # Explicit types for the nginx JSON access-log numbers: with
+            # dynamic mapping, request_time became `long` from a first
+            # sub-millisecond /health value (0.001 -> 0). Pinned to double so
+            # LLM request durations keep millisecond precision. (Only affects
+            # indices created after this change — ES can't re-type an
+            # existing field.)
+            status:
+              type: long
+            body_bytes_sent:
+              type: long
+            request_length:
+              type: long
+            request_time:
+              type: double
+
+    # ----------------------------------------------------------------------------
+    # Ingest pipeline for llama-server slot/timing lines.
+    #
+    # Verified against the real build (llama.cpp master, 2026): one event per
+    # line, e.g.
+    #   25.45.408.998 I slot print_timing: id  0 | task 8368 | prompt eval time =    5724.56 ms /  5048 tokens (    1.13 ms per token,   881.81 tokens per second)
+    #   25.45.411.596 I slot      release: id  0 | task 8368 | stop processing: n_tokens = 87682, truncated = 0
+    #
+    # The leading D.SS.mmm.mmm clock is RELATIVE (process uptime), so Filebeat's
+    # @timestamp (read time) is the correct event time — log_clock is only kept
+    # as a string for in-log ordering.
+    # ----------------------------------------------------------------------------
+    llama_pipeline:
+      description: Parse llama-server slot/timing log lines into structured fields
+      processors:
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*n_gen =\s+(?<n_gen>\d+), tg =\s+(?<tg_tps>[\d.]+) t/s, tg_3s =\s+(?<tg3s_tps>[\d.]+) t/s'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*prompt eval time =\s+(?<prompt_eval_ms>[\d.]+) ms / +(?<prompt_tokens>\d+) tokens \(\s+(?<prompt_ms_per_token>[\d.]+) ms per token,\s+(?<prompt_tps>[\d.]+) tokens per second\)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+eval time =\s+(?<eval_ms>[\d.]+) ms / +(?<gen_tokens>\d+) tokens \(\s+(?<gen_ms_per_token>[\d.]+) ms per token,\s+(?<gen_tps>[\d.]+) tokens per second\)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+total time =\s+(?<total_ms>[\d.]+) ms / +(?<total_tokens>\d+) tokens'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+graphs reused = +(?<graphs_reused>\d+)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+draft acceptance = +(?<draft_acceptance>[\d.]+) \(\s*(?<draft_accepted>\d+) accepted / +(?<draft_generated>\d+) generated\), mean len = +(?<draft_mean_len>[\d.]+)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+prompt processing, n_tokens = +(?<prompt_proc_tokens>\d+), progress = +(?<progress>[\d.]+), t = +(?<prompt_proc_s>[\d.]+) s / +(?<prompt_proc_tps>[\d.]+) tokens per second'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+release:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*stop processing: n_tokens = +(?<n_tokens>\d+), truncated = +(?<truncated>\d+)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+launch_slot_:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*processing task, is_child = +(?<is_child>\d+)'
+            ignore_failure: true
+        - grok:
+            field: message
+            patterns:
+              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+get_availabl:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)'
+            ignore_failure: true
+        - script:
+            source: |
+              if (ctx.containsKey('n_gen')) {
+                ctx.llama = ['event': 'slot_progress'];
+              } else if (ctx.containsKey('prompt_eval_ms')) {
+                ctx.llama = ['event': 'prompt_eval'];
+              } else if (ctx.containsKey('eval_ms')) {
+                ctx.llama = ['event': 'generation'];
+              } else if (ctx.containsKey('total_ms')) {
+                ctx.llama = ['event': 'total_time'];
+              } else if (ctx.containsKey('graphs_reused')) {
+                ctx.llama = ['event': 'graphs_reused'];
+              } else if (ctx.containsKey('draft_acceptance')) {
+                ctx.llama = ['event': 'draft_acceptance'];
+              } else if (ctx.containsKey('prompt_proc_tokens')) {
+                ctx.llama = ['event': 'prompt_progress'];
+              } else if (ctx.containsKey('truncated')) {
+                ctx.llama = ['event': 'slot_release'];
+              } else if (ctx.containsKey('is_child')) {
+                ctx.llama = ['event': 'slot_launch'];
+              } else if (ctx.message != null && ctx.message.indexOf('get_availabl') != -1) {
+                ctx.llama = ['event': 'slot_select'];
+              }
+        - convert:
+            field: slot_id
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: task_id
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: n_gen
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_tokens
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: gen_tokens
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: total_tokens
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: graphs_reused
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: draft_accepted
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: draft_generated
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: n_tokens
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: truncated
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: is_child
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_proc_tokens
+            type: integer
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: tg_tps
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: tg3s_tps
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_eval_ms
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_ms_per_token
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_tps
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: eval_ms
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: gen_ms_per_token
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: gen_tps
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: total_ms
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: draft_acceptance
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: draft_mean_len
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: progress
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_proc_s
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+        - convert:
+            field: prompt_proc_tps
+            type: double
+            ignore_failure: true
+            ignore_missing: true
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 10
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: elk
+
+    # --- Elastic APT repository (9.x) -----------------------------------------
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Fetch Elastic GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
+      args:
+        creates: /etc/apt/keyrings/elasticsearch.gpg
+
+    - name: Add Elastic APT repository (9.x)
+      ansible.builtin.deb822_repository:
+        name: elastic
+        types: deb
+        uris: https://artifacts.elastic.co/packages/9.x/apt
+        suites: stable
+        components: [main]
+        signed_by: /etc/apt/keyrings/elasticsearch.gpg
+        state: present
+
+    # Hard-fail on update errors: the apt module can swallow a failed
+    # `apt-get update` (transient network on first boot) and then the install
+    # task fails confusingly with "No package matching ... is available".
+    # A standalone update step makes the real error visible and the play
+    # simply re-runs cleanly.
+    - name: Update apt cache (hard failure on error)
+      ansible.builtin.shell: apt-get update -qq
+      changed_when: false
+      register: apt_update
+      failed_when: apt_update.rc != 0
+
+    - name: Install Elasticsearch and Kibana (9.x)
+      ansible.builtin.apt:
+        update_cache: false
+        name:
+          - elasticsearch=9.*
+          - kibana=9.*
+        state: present
+      register: elastic_install
+
+    # The debs' postinsts try to start both services with stock config
+    # (ES: security auto-on + random password, Kibana: no encryption key).
+    # Stop them, configure, then start cleanly.
+    - name: Stop services started by package postinsts
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [elasticsearch, kibana]
+      when: elastic_install is changed
+
+    # --- Elasticsearch ---------------------------------------------------------
+    # Security is disabled on purpose: single-user trusted LAN, consistent with
+    # the rest of the lab (Prometheus, node_exporter, llama /metrics are all
+    # unauthenticated). Re-enable before exposing beyond 192.168.51.0/24.
+    #
+    # The ES 9 deb postinst AUTO-CONFIGURES SECURITY on first start (writes
+    # xpack.security.enabled: true + ssl + enrollment + initial_master_nodes),
+    # so settings are managed per-key (replace in place or append) — appending
+    # a block would create duplicate keys and ES refuses to start.
+    #
+    # Two postinst settings need active removal/override:
+    #   - cluster.initial_master_nodes: ILLEGAL together with discovery.type
+    #     single-node ("setting [cluster.initial_master_nodes] is not allowed
+    #     when [discovery.type] is set to [single-node]")
+    #   - http.host: 0.0.0.0 (postinst) — would override network.host and
+    #     expose HTTP on every interface, so pin it to the LAN IP.
+    - name: Remove postinst cluster.initial_master_nodes (conflicts with single-node)
+      ansible.builtin.replace:
+        path: /etc/elasticsearch/elasticsearch.yml
+        regexp: "^\\s*#?\\s*cluster\\.initial_master_nodes:.*$"
+        replace: ""
+
+    # One-time migration: an earlier playbook version appended a marker block
+    # (which collided with the postinst's auto-config). Remove it so the
+    # per-key lineinfile tasks below see a clean file. No-op on new VMs.
+    - name: Remove legacy managed block (elasticsearch.yml)
+      ansible.builtin.shell: |
+        python3 - <<'EOF'
+        import re
+        p = "/etc/elasticsearch/elasticsearch.yml"
+        s = open(p).read()
+        s2 = re.sub(r"# BEGIN ANSIBLE MANAGED BLOCK: elk\n.*?# END ANSIBLE MANAGED BLOCK: elk\n?", "", s, flags=re.S)
+        if s2 != s:
+            open(p, "w").write(s2)
+            print("removed")
+        EOF
+      register: legacy_es_block
+      changed_when: "'removed' in legacy_es_block.stdout"
+      failed_when: false
+
+    - name: Configure Elasticsearch (single-node, security off)
+      ansible.builtin.lineinfile:
+        path: /etc/elasticsearch/elasticsearch.yml
+        owner: elasticsearch
+        group: elasticsearch
+        mode: "0660"
+        line: "{{ item }}"
+        regexp: "^[\\s#]*{{ item.split(':')[0] | trim | regex_escape }}:"
+      loop:
+        - "cluster.name: elk-home"
+        - "node.name: elk-1"
+        - "network.host: {{ es_ip }}"
+        - "http.host: {{ es_ip }}"
+        - "discovery.type: single-node"
+        - "xpack.security.enabled: false"
+
+    - name: Start and enable Elasticsearch
+      ansible.builtin.systemd:
+        name: elasticsearch
+        state: started
+        enabled: true
+
+    # ES binds to the LAN IP only (http.host is pinned — no loopback), so wait
+    # on the LAN IP, not 127.0.0.1.
+    - name: Wait for Elasticsearch to answer
+      ansible.builtin.wait_for:
+        host: "{{ es_ip }}"
+        port: 9200
+        timeout: 300
+
+    # Kibana creates internal system indices (.ds-*) with replicas=1; on a
+    # single-node cluster those replicas can never be assigned, so the
+    # cluster sits at yellow forever and the green check below blocks.
+    # Per-index updates are required — the `PUT /_all/_settings` action does
+    # NOT cover system indices (verified on 9.5.2). Idempotent no-op once
+    # every index is at 0.
+    - name: Zero replicas on all indices (single-node cluster)
+      ansible.builtin.shell: |
+        for idx in $(curl -s "http://{{ es_ip }}:9200/_cat/indices?expand_wildcards=all&format=json&h=index" | python3 -c "import json,sys; [print(i['index']) for i in json.load(sys.stdin)]"); do
+          enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$idx")
+          curl -s -X PUT "http://{{ es_ip }}:9200/${enc}/_settings" -H "Content-Type: application/json" -d '{"index.number_of_replicas":0}' > /dev/null
+        done
+      changed_when: false
+
+    # timeout must exceed the URL's own 60s wait — the uri module's default
+    # (30s) otherwise expires mid-wait and every attempt "fails".
+    - name: Wait for cluster health
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_cluster/health?wait_for_status=green&timeout=60s"
+        status_code: 200
+        timeout: 90
+      register: es_health
+      until: es_health.status == 200
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    - name: Deploy ILM policy (14d hot, then delete)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_ilm/policy/llm-logs-14d"
+        method: PUT
+        body_format: json
+        body: "{{ ilm_policy | to_nice_json }}"
+        status_code: 200
+
+    - name: Deploy index template (llm-logs-*)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_index_template/llm-logs"
+        method: PUT
+        body_format: json
+        body: "{{ index_template | to_nice_json }}"
+        status_code: 200
+
+    - name: Deploy llama log ingest pipeline
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_ingest/pipeline/llama-logs"
+        method: PUT
+        body_format: json
+        body: "{{ llama_pipeline | to_nice_json }}"
+        status_code: 200
+
+    # ES 9 _simulate response shape: docs[0].doc._source (doc_out is gone).
+    - name: Sanity-check pipeline against a real slot log line
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_ingest/pipeline/llama-logs/_simulate"
+        method: POST
+        body_format: json
+        body: '{"docs":[{"_source":{"message":"25.45.408.998 I slot print_timing: id  0 | task 8368 | prompt eval time =    5724.56 ms /  5048 tokens (    1.13 ms per token,   881.81 tokens per second)"}}]}'
+        status_code: 200
+      register: pipeline_sim
+      failed_when: >-
+        pipeline_sim.status != 200
+        or pipeline_sim.json.docs[0].doc._source.get('llama', {}).get('event') != 'prompt_eval'
+        or pipeline_sim.json.docs[0].doc._source.get('prompt_tokens') != 5048
+      changed_when: false
+
+    # --- Kibana ----------------------------------------------------------------
+    # Kibana 9 removed server.encryptionKey (the key is generated and managed
+    # by Kibana itself in its data dir); the old line is stripped if present.
+    - name: Remove legacy server.encryptionKey (removed in Kibana 9)
+      ansible.builtin.lineinfile:
+        path: /etc/kibana/kibana.yml
+        regexp: '^server\.encryptionKey:'
+        state: absent
+
+    - name: Remove legacy managed block (kibana.yml)
+      ansible.builtin.shell: |
+        python3 - <<'EOF'
+        import re
+        p = "/etc/kibana/kibana.yml"
+        s = open(p).read()
+        s2 = re.sub(r"# BEGIN ANSIBLE MANAGED BLOCK: elk\n.*?# END ANSIBLE MANAGED BLOCK: elk\n?", "", s, flags=re.S)
+        if s2 != s:
+            open(p, "w").write(s2)
+            print("removed")
+        EOF
+      register: legacy_kb_block
+      changed_when: "'removed' in legacy_kb_block.stdout"
+      failed_when: false
+
+    - name: Configure Kibana
+      ansible.builtin.lineinfile:
+        path: /etc/kibana/kibana.yml
+        owner: root
+        group: kibana
+        mode: "0644"
+        line: "{{ item }}"
+        regexp: "^[\\s#]*{{ item.split(':')[0] | trim | regex_escape }}:"
+      loop:
+        - 'server.port: 5601'
+        - 'server.host: "0.0.0.0"'
+        - 'elasticsearch.hosts: ["http://{{ es_ip }}:9200"]'
+
+    - name: Start and enable Kibana
+      ansible.builtin.systemd:
+        name: kibana
+        state: started
+        enabled: true
+
+    - name: Wait for Kibana to answer
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 5601
+        timeout: 300
+
+    - name: Wait for Kibana status API
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:5601/api/status"
+        status_code: 200
+      register: kibana_status
+      until: kibana_status.status == 200
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    # Kibana 9 content build. The saved-object `_import` API no longer
+    # accepts JSON (415) and the `visualization` type is vestigial — charts
+    # are Lens objects, so the content is driven through the as-code REST
+    # APIs (verified against 9.5.2):
+    #   1. data view  -> POST /api/saved_objects/index-pattern/<id>
+    #      (saved-object type "index-pattern"; the as-code POST /api/data_views
+    #      route is tech-preview-gated and not available)
+    #   2. 4 lens charts -> POST /api/visualizations (body has no id/version;
+    #      filters use {"type":"condition","condition":{field,operator,value}})
+    #   3. dashboard  -> POST /api/saved_objects/dashboard/<id> (panels +
+    #      references to the fresh lens ids)
+    # build_kibana_content.py is idempotent: it recreates the lenses by
+    # exact title, then rewrites the dashboard — so this reports changed on
+    # every run by design.
+    - name: Create Kibana content directory
+      ansible.builtin.file:
+        path: /usr/local/share/kibana-llm-content
+        state: directory
+        mode: "0755"
+
+    - name: Deploy Kibana content definitions and build script
+      ansible.builtin.copy:
+        src: "dashboards/{{ item }}"
+        dest: "/usr/local/share/kibana-llm-content/{{ item }}"
+        mode: "0644"
+      loop:
+        - llm-lenses.json
+        - llm-dashboard.json
+        - build_kibana_content.py
+
+    - name: Build LLM Observability data view, charts and dashboard
+      ansible.builtin.command:
+        cmd: python3 /usr/local/share/kibana-llm-content/build_kibana_content.py http://127.0.0.1:5601 /usr/local/share/kibana-llm-content
+      register: kibana_content
+      changed_when: true
+
+    - name: Show Kibana content build result
+      ansible.builtin.debug:
+        var: kibana_content.stdout_lines
