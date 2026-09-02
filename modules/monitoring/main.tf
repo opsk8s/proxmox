@@ -35,9 +35,14 @@ resource "proxmox_virtual_environment_vm" "monitoring_vm" {
   initialization {
     ip_config {
       ipv4 {
-        address = "192.168.51.206/24"
-        gateway = "192.168.51.1"
+        address = "${var.lan_ip}/${split("/", var.lan_network)[1]}"
+        gateway = var.lan_gateway
       }
+    }
+
+    dns {
+      domain  = "lan"
+      servers = [var.dns_ip, var.lan_gateway]
     }
 
     user_data_file_id = proxmox_virtual_environment_file.monitoring_config.id
@@ -91,11 +96,18 @@ action "ansible_playbook_run" "configure_monitoring" {
     private_key_file = var.ssh_private_key_file
     extra_vars = {
       grafana_admin_password = var.grafana_admin_password
+      ansible_host           = var.lan_ip
+      llm_ip                 = var.llm_ip
+      jenkins_ip             = var.jenkins_ip
+      jenkins_agent_ip       = var.jenkins_agent_ip
+      open_webui_ip          = var.open_webui_ip
+      postgres_ip            = var.postgres_ip
+      elk_ip                 = var.elk_ip
     }
   }
 }
 
 output "grafana_url" {
-  value     = "http://192.168.51.206:3000"
+  value     = "http://${var.lan_ip}:3000"
   sensitive = false
 }

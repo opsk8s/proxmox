@@ -7,9 +7,9 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    # terraform passes the value via ansible_playbook_run extra_vars
+    # terraform passes the values via ansible_playbook_run extra_vars
+    # (grafana_admin_password + all VM IPs, from proxmox.tfvars)
     grafana_admin_password: ""
-    lan_gw: 192.168.51.1
 
     blackbox_version: "0.28.0"
     blackbox_url: "https://github.com/prometheus/blackbox_exporter/releases/download/v{{ blackbox_version }}/blackbox_exporter-{{ blackbox_version }}.linux-amd64.tar.gz"
@@ -32,35 +32,35 @@
         # node_exporter on every VM
         - job_name: nodes
           static_configs:
-            - targets: ["192.168.51.201:9100"]
+            - targets: ["{{ llm_ip }}:9100"]
               labels: {instance_name: "llm-ubuntu"}
-            - targets: ["192.168.51.202:9100"]
+            - targets: ["{{ jenkins_ip }}:9100"]
               labels: {instance_name: "jenkins-server"}
-            - targets: ["192.168.51.203:9100"]
+            - targets: ["{{ jenkins_agent_ip }}:9100"]
               labels: {instance_name: "jenkins-agent"}
-            - targets: ["192.168.51.204:9100"]
+            - targets: ["{{ open_webui_ip }}:9100"]
               labels: {instance_name: "open-webui"}
-            - targets: ["192.168.51.205:9100"]
+            - targets: ["{{ postgres_ip }}:9100"]
               labels: {instance_name: "postgres"}
-            - targets: ["192.168.51.207:9100"]
+            - targets: ["{{ elk_ip }}:9100"]
               labels: {instance_name: "elk"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
           static_configs:
-            - targets: ["192.168.51.201:8001", "192.168.51.201:8002", "192.168.51.201:8003", "192.168.51.201:8004"]
+            - targets: ["{{ llm_ip }}:8001", "{{ llm_ip }}:8002", "{{ llm_ip }}:8003", "{{ llm_ip }}:8004"]
               labels: {instance_name: "llm-ubuntu"}
 
         - job_name: postgres
           static_configs:
-            - targets: ["192.168.51.205:9187"]
+            - targets: ["{{ postgres_ip }}:9187"]
               labels: {instance_name: "postgres"}
 
         # Jenkins prometheus plugin default endpoint (trailing slash required)
         - job_name: jenkins
           metrics_path: /prometheus/
           static_configs:
-            - targets: ["192.168.51.202:8080"]
+            - targets: ["{{ jenkins_ip }}:8080"]
               labels: {instance_name: "jenkins-server"}
 
         # blackbox probe for services without a metrics endpoint
@@ -69,9 +69,9 @@
           params:
             module: [http_2xx]
           static_configs:
-            - targets: ["http://192.168.51.204:8080/"]
+            - targets: ["http://{{ open_webui_ip }}:8080/"]
               labels: {instance_name: "open-webui"}
-            - targets: ["http://192.168.51.207:9200/", "http://192.168.51.207:5601/"]
+            - targets: ["http://{{ elk_ip }}:9200/", "http://{{ elk_ip }}:5601/"]
               labels: {instance_name: "elk"}
           relabel_configs:
             - source_labels: [__address__]

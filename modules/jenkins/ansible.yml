@@ -10,10 +10,10 @@
     jenkins_admin_email: ""
     jenkins_home: /var/lib/jenkins
     jenkins_user_home: "{{ jenkins_home }}"
+    # jenkins_http_host / jenkins_agent_host: terraform passes them via
+    # ansible_playbook_run extra_vars (values live in proxmox.tfvars)
     jenkins_http_protocol: http
-    jenkins_http_host: 192.168.51.202
     jenkins_http_port: 8080
-    jenkins_agent_host: 192.168.51.203
     jenkins_agent_user: jenkins
     jenkins_agent_ssh_key_path: /Users/ffhs/.ssh/jenkins-agent
     jenkins_agent_ssh_key: "{{ lookup('file', jenkins_agent_ssh_key_path) | trim }}"

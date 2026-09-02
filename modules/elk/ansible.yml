@@ -5,7 +5,7 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    es_ip: 192.168.51.207
+    # es_ip: terraform passes it via extra_vars (proxmox.tfvars)
 
     # Indices: Filebeat on the LLM VM ships into llm-logs-YYYY.MM.dd
     # (see modules/llm/observability.yml). 14-day retention, then delete.

@@ -28,9 +28,14 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
   initialization {
     ip_config {
       ipv4 {
-        address = "192.168.51.204/24"
-        gateway = "192.168.51.1"
+        address = "${var.lan_ip}/${split("/", var.lan_network)[1]}"
+        gateway = var.lan_gateway
       }
+    }
+
+    dns {
+      domain  = "lan"
+      servers = [var.dns_ip, var.lan_gateway]
     }
 
     user_data_file_id = proxmox_virtual_environment_file.openwebui_config.id
@@ -79,5 +84,10 @@ action "ansible_playbook_run" "configure_openwebui" {
     playbooks        = ["${path.module}/ansible.yml"]
     inventory_files  = ["${path.module}/inventory.ini"]
     private_key_file = var.ssh_private_key_file
+    extra_vars = {
+      ansible_host = var.lan_ip
+      webui_ip     = var.lan_ip
+      llm_ip       = var.llm_ip
+    }
   }
 }

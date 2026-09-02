@@ -16,7 +16,7 @@
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
-    es_host: 192.168.51.207
+    # es_host: the Makefile passes it via --extra-vars (proxmox.tfvars)
 
     nginx_log_format: |
       log_format llm_json escape=json

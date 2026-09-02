@@ -10,7 +10,8 @@
     postgres_password: ""
     smartshift_admin_password: ""
     analytics_ro_password: ""
-    lan_subnet: 192.168.51.0/24
+    # lan_network: terraform passes it via extra_vars (proxmox.tfvars)
+    lan_subnet: "{{ lan_network }}"
     pg_port: 5432
 
   tasks:

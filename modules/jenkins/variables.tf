@@ -25,3 +25,23 @@ variable "jenkins_admin_password" {
 variable "ssh_private_key_file" {
   type = string
 }
+
+variable "lan_ip" {
+  type = string
+}
+
+variable "lan_network" {
+  type = string
+}
+
+variable "lan_gateway" {
+  type = string
+}
+
+variable "dns_ip" {
+  type = string
+}
+
+variable "jenkins_agent_ip" {
+  type = string
+}

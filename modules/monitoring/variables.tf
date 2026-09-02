@@ -22,6 +22,47 @@ variable "ssh_private_key_file" {
   type = string
 }
 
+variable "lan_ip" {
+  type = string
+}
+
+variable "lan_network" {
+  type = string
+}
+
+variable "lan_gateway" {
+  type = string
+}
+
+variable "dns_ip" {
+  type = string
+}
+
+# IP of every other VM — Prometheus scrape targets (playbook extra_vars)
+variable "llm_ip" {
+  type = string
+}
+
+variable "jenkins_ip" {
+  type = string
+}
+
+variable "jenkins_agent_ip" {
+  type = string
+}
+
+variable "open_webui_ip" {
+  type = string
+}
+
+variable "postgres_ip" {
+  type = string
+}
+
+variable "elk_ip" {
+  type = string
+}
+
 variable "grafana_admin_password" {
   type = string
 }

@@ -10,10 +10,10 @@
     webui_venv: /home/openwebui/open-webui/.venv
     uv_bin: /home/openwebui/.local/bin/uv
     webui_port: 8080
-    webui_ip: 192.168.51.204
+    # webui_ip / llm_ip: terraform passes them via extra_vars (proxmox.tfvars)
     # OpenAI-compatible endpoint: nginx load balancer on the LLM VM in front
     # of the 4 llama.cpp servers (ports 8001-8004, see ansible.yml)
-    llm_api_base_url: http://192.168.51.201:8000/v1
+    llm_api_base_url: "http://{{ llm_ip }}:8000/v1"
 
   tasks:
     - name: Wait for SSH (first boot)

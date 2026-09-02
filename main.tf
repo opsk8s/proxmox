@@ -1,5 +1,5 @@
 provider "proxmox" {
-  endpoint = "https://192.168.51.200:8006/"
+  endpoint = "https://${var.pve_ip}:8006/"
   username = "root@pam"
   # because self-signed TLS certificate is in use
   insecure = true
@@ -34,6 +34,10 @@ module "llm" {
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   hf_token             = var.hf_token
   ssh_private_key_file = var.ssh_private_key_file
+  lan_ip               = var.llm_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -47,6 +51,11 @@ module "jenkins" {
   ssh_public_key         = trimspace(data.local_file.public_key.content)
   jenkins_admin_password = var.jenkins_admin_password
   ssh_private_key_file   = var.ssh_private_key_file
+  lan_ip                 = var.jenkins_ip
+  lan_network            = var.lan_network
+  lan_gateway            = var.lan_gateway
+  dns_ip                 = var.dns_ip
+  jenkins_agent_ip       = var.jenkins_agent_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -59,6 +68,10 @@ module "jenkins_agent" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.jenkins_public_key.content)
   ssh_private_key_file = var.jenkins_agent_ssh_private_key_file
+  lan_ip               = var.jenkins_agent_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -71,6 +84,11 @@ module "open_webui" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   ssh_private_key_file = var.ssh_private_key_file
+  lan_ip               = var.open_webui_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+  llm_ip               = var.llm_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -86,6 +104,10 @@ module "postgres" {
   smartshift_admin_password = var.smartshift_admin_password
   analytics_ro_password     = var.analytics_ro_password
   ssh_private_key_file      = var.ssh_private_key_file
+  lan_ip                    = var.postgres_ip
+  lan_network               = var.lan_network
+  lan_gateway               = var.lan_gateway
+  dns_ip                    = var.dns_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -99,6 +121,16 @@ module "monitoring" {
   ssh_public_key         = trimspace(data.local_file.public_key.content)
   grafana_admin_password = var.grafana_admin_password
   ssh_private_key_file   = var.ssh_private_key_file
+  lan_ip                 = var.monitoring_ip
+  lan_network            = var.lan_network
+  lan_gateway            = var.lan_gateway
+  dns_ip                 = var.dns_ip
+  llm_ip                 = var.llm_ip
+  jenkins_ip             = var.jenkins_ip
+  jenkins_agent_ip       = var.jenkins_agent_ip
+  open_webui_ip          = var.open_webui_ip
+  postgres_ip            = var.postgres_ip
+  elk_ip                 = var.elk_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -111,6 +143,34 @@ module "elk" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   ssh_private_key_file = var.ssh_private_key_file
+  lan_ip               = var.elk_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+
+  depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "dns" {
+  source               = "./modules/dns"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file = var.ssh_private_key_file
+  lan_ip               = var.dns_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+  pve_ip               = var.pve_ip
+  llm_ip               = var.llm_ip
+  jenkins_ip           = var.jenkins_ip
+  jenkins_agent_ip     = var.jenkins_agent_ip
+  open_webui_ip        = var.open_webui_ip
+  postgres_ip          = var.postgres_ip
+  monitoring_ip        = var.monitoring_ip
+  elk_ip               = var.elk_ip
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }

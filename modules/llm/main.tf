@@ -31,9 +31,14 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 
     ip_config {
       ipv4 {
-        address = "192.168.51.201/24"
-        gateway = "192.168.51.1"
+        address = "${var.lan_ip}/${split("/", var.lan_network)[1]}"
+        gateway = var.lan_gateway
       }
+    }
+
+    dns {
+      domain  = "lan"
+      servers = [var.dns_ip, var.lan_gateway]
     }
 
     user_data_file_id = proxmox_virtual_environment_file.llm_config.id
@@ -132,5 +137,8 @@ action "ansible_playbook_run" "configure_llm" {
     playbooks        = ["${path.module}/ansible.yml"]
     inventory_files  = ["${path.module}/inventory.ini"]
     private_key_file = var.ssh_private_key_file
+    extra_vars = {
+      ansible_host = var.lan_ip
+    }
   }
 }

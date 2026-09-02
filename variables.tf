@@ -67,3 +67,63 @@ variable "grafana_admin_password" {
   description = "Grafana admin password"
 }
 
+# --- LAN addressing (all in proxmox.tfvars) ----------------------------------
+# Single /24 on vmbr0; every VM gets a static address. The playbooks receive
+# these via the ansible_playbook_run extra_vars; the Makefile targets read the
+# same values from $(TFVARS).
+
+variable "lan_network" {
+  type        = string
+  description = "LAN network in CIDR notation, e.g. 192.168.51.0/24"
+}
+
+variable "lan_gateway" {
+  type        = string
+  description = "LAN default gateway (router) IP"
+}
+
+variable "pve_ip" {
+  type        = string
+  description = "PVE host IP"
+}
+
+variable "llm_ip" {
+  type        = string
+  description = "IP of the LLM inference VM"
+}
+
+variable "jenkins_ip" {
+  type        = string
+  description = "IP of the Jenkins controller VM"
+}
+
+variable "jenkins_agent_ip" {
+  type        = string
+  description = "IP of the Jenkins agent VM"
+}
+
+variable "open_webui_ip" {
+  type        = string
+  description = "IP of the Open WebUI VM"
+}
+
+variable "postgres_ip" {
+  type        = string
+  description = "IP of the PostgreSQL VM"
+}
+
+variable "monitoring_ip" {
+  type        = string
+  description = "IP of the monitoring (Prometheus/Grafana) VM"
+}
+
+variable "elk_ip" {
+  type        = string
+  description = "IP of the ELK (Elasticsearch/Kibana) VM"
+}
+
+variable "dns_ip" {
+  type        = string
+  description = "IP of the private DNS (dnsmasq) VM"
+}
+

@@ -1,0 +1,188 @@
+---
+- name: Deploy dnsmasq private DNS (VM)
+  hosts: dns
+  become: true
+  # must stay false: with gather_facts: true the play dies at "Gathering
+  # Facts" before wait_for_connection below gets a chance to wait for SSH
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+    # Encrypted upstreams: DNS-over-TLS (RFC 7858, port 853), two providers
+    # for redundancy. (The VM's own resolver uses the router instead — see
+    # initialization.dns in main.tf — so there is no self-reference loop.)
+    tls_upstreams:
+      - "cloudflare-dns.com"
+      - "dns.quad9.net"
+
+    # static records for every service in this repo.
+    # All IPs arrive via extra_vars from Terraform (proxmox.tfvars).
+    lan_records:
+      - "address=/pve.lan/{{ pve_ip }}"
+      - "address=/dns.lan/{{ dns_ip }}"
+      - "address=/llm.lan/{{ llm_ip }}"
+      - "address=/jenkins.lan/{{ jenkins_ip }}"
+      - "address=/jenkins-agent.lan/{{ jenkins_agent_ip }}"
+      - "address=/open-webui.lan/{{ open_webui_ip }}"
+      - "address=/postgres.lan/{{ postgres_ip }}"
+      - "address=/monitoring.lan/{{ monitoring_ip }}"
+      - "address=/grafana.lan/{{ monitoring_ip }}"
+      - "address=/prometheus.lan/{{ monitoring_ip }}"
+      - "address=/elk.lan/{{ elk_ip }}"
+      - "address=/kibana.lan/{{ elk_ip }}"
+      - "address=/elasticsearch.lan/{{ elk_ip }}"
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: dns
+
+    - name: Install dnsmasq and dig
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - dnsmasq
+          - dnsutils
+        state: present
+
+    # Pre-flight checks: never switch the LAN to a broken upstream. The
+    # running dnsmasq keeps serving with its old config until every check
+    # below has passed.
+    - name: Verify dnsmasq binary supports TLS (DoT)
+      ansible.builtin.command:
+        cmd: dnsmasq --version
+      register: dnsmasq_version
+      changed_when: false
+
+    - name: Fail early when the dnsmasq package has no TLS support
+      ansible.builtin.fail:
+        msg: "dnsmasq --version reports no TLS support; tls-url upstreams would not work"
+      when: "'TLS is enabled' not in dnsmasq_version.stdout"
+
+    - name: Probe DNS-over-TLS reachability to each upstream
+      ansible.builtin.command:
+        cmd: dig +tls +time=5 +tries=3 @{{ upstream }} {{ upstream }} A
+      loop: "{{ tls_upstreams }}"
+      loop_control:
+        label: "{{ item }}"
+      register: dot_probes
+      changed_when: false
+
+    - name: Fail early when a DNS-over-TLS probe failed
+      ansible.builtin.fail:
+        msg: "DoT probe failed for {{ item.item }} (rc={{ item.rc }}): {{ item.stderr | default('') }}"
+      loop: "{{ dot_probes.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
+
+    - name: Ensure dnsmasq config directory exists
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy upstream + domain policy
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.d/upstream.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Upstream is defined explicitly below; do not read /etc/resolv.conf.
+          no-resolv
+          {% for upstream in tls_upstreams %}
+          # Encrypted upstream (DNS-over-TLS, port 853).
+          tls-url={{ upstream }}
+          {% endfor %}
+          # Only the DoT endpoints' own names are resolved in cleartext via
+          # the router — never the queries themselves.
+          {% for upstream in tls_upstreams %}
+          server=/{{ upstream }}/{{ lan_gateway }}
+          {% endfor %}
+          # .lan is local: never send it upstream.
+          local=/lan/
+          # Keep the router's own domain resolving back to the router.
+          server=/w8s.local/{{ lan_gateway }}
+          # No single-label lookups or RFC1918 answers from upstream.
+          domain-needed
+          bogus-priv
+      notify: restart dnsmasq
+
+    - name: Deploy static .lan records
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.d/lan-records.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {% for record in lan_records %}
+          {{ record }}
+          {% endfor %}
+      notify: restart dnsmasq
+
+    - name: Check dnsmasq config syntax before switching
+      ansible.builtin.command:
+        cmd: dnsmasq --test
+      changed_when: false
+
+    - name: Enable and start dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: started
+        enabled: true
+
+  handlers:
+    - name: restart dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+
+# handlers of the previous play fire before this one starts, so dnsmasq
+# is already running with the final config when we verify
+- name: Verify DNS resolution
+  hosts: dns
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+
+  tasks:
+    - name: Check a static .lan record
+      ansible.builtin.command:
+        cmd: dig +short postgres.lan @127.0.0.1
+      register: lan_check
+      changed_when: false
+
+    - name: Fail early when the static record does not resolve
+      ansible.builtin.fail:
+        msg: "expected {{ postgres_ip }} for postgres.lan, got: {{ lan_check.stdout_lines | join(',') }}"
+      when: "'{{ postgres_ip }}' not in lan_check.stdout_lines"
+
+    # example.com has no local record and the only configured upstreams are
+    # the two tls-url entries, so a successful answer proves the encrypted
+    # forwarding path works end to end.
+    - name: Check encrypted upstream forwarding
+      ansible.builtin.command:
+        cmd: dig +short example.com @127.0.0.1
+      register: upstream_check
+      changed_when: false
+
+    - name: Fail early when upstream forwarding is broken
+      ansible.builtin.fail:
+        msg: "dig +short example.com via 127.0.0.1 returned no answer"
+      when: (upstream_check.stdout_lines | default([]) | length) == 0

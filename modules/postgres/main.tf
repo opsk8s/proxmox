@@ -28,9 +28,14 @@ resource "proxmox_virtual_environment_vm" "postgres_vm" {
   initialization {
     ip_config {
       ipv4 {
-        address = "192.168.51.205/24"
-        gateway = "192.168.51.1"
+        address = "${var.lan_ip}/${split("/", var.lan_network)[1]}"
+        gateway = var.lan_gateway
       }
+    }
+
+    dns {
+      domain  = "lan"
+      servers = [var.dns_ip, var.lan_gateway]
     }
 
     user_data_file_id = proxmox_virtual_environment_file.postgres_config.id
@@ -80,6 +85,8 @@ action "ansible_playbook_run" "configure_postgres" {
       postgres_password         = var.postgres_password
       smartshift_admin_password = var.smartshift_admin_password
       analytics_ro_password     = var.analytics_ro_password
+      ansible_host              = var.lan_ip
+      lan_network               = var.lan_network
     }
   }
 }

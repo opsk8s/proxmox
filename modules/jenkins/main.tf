@@ -33,9 +33,14 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
 
     ip_config {
       ipv4 {
-        address = "192.168.51.202/24"
-        gateway = "192.168.51.1"
+        address = "${var.lan_ip}/${split("/", var.lan_network)[1]}"
+        gateway = var.lan_gateway
       }
+    }
+
+    dns {
+      domain  = "lan"
+      servers = [var.dns_ip, var.lan_gateway]
     }
 
     user_data_file_id = proxmox_virtual_environment_file.jenkins_config.id
@@ -83,6 +88,9 @@ action "ansible_playbook_run" "configure_jenkins" {
     private_key_file = var.ssh_private_key_file
     extra_vars = {
       jenkins_admin_password = var.jenkins_admin_password
+      ansible_host           = var.lan_ip
+      jenkins_http_host      = var.lan_ip
+      jenkins_agent_host     = var.jenkins_agent_ip
     }
   }
 }
