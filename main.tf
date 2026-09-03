@@ -40,7 +40,7 @@ module "llm" {
   dns_ip               = var.dns_ip
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "jenkins" {
@@ -59,7 +59,7 @@ module "jenkins" {
   jenkins_agent_ip       = var.jenkins_agent_ip
   keyboard_layout        = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "jenkins_agent" {
@@ -76,7 +76,7 @@ module "jenkins_agent" {
   dns_ip               = var.dns_ip
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "open_webui" {
@@ -94,7 +94,7 @@ module "open_webui" {
   llm_ip               = var.llm_ip
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "postgres" {
@@ -114,7 +114,7 @@ module "postgres" {
   dns_ip                    = var.dns_ip
   keyboard_layout           = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "monitoring" {
@@ -138,7 +138,7 @@ module "monitoring" {
   elk_ip                 = var.elk_ip
   keyboard_layout        = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "elk" {
@@ -155,7 +155,7 @@ module "elk" {
   dns_ip               = var.dns_ip
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [proxmox_download_file.fedora_cloud_image]
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 module "dns" {
