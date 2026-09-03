@@ -112,7 +112,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
     id     = "0000:63:00.1"
   }
 
-  keyboard_layout = "de-ch"
+  keyboard_layout = var.keyboard_layout
 
   depends_on = [
     proxmox_virtual_environment_file.llm_config

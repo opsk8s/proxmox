@@ -272,19 +272,19 @@
       become: true
       become_user: llm
 
-    - name: Build vllm using python 3.14
-      ansible.builtin.shell: |
-        # Explicitly load the ROCm environment variables we added earlier
-
-        # Execute the build script
-        /home/llm/scripts/build-vllm.sh
-      args:
-        executable: /bin/bash
-        # Idempotency: Skip this task if the final compiled binary already exists.
-        # (Adjust this path if your script outputs the binary somewhere else)
-        creates: /home/llm/.vllm/bin/activate
-      become: true
-      become_user: llm
+#    - name: Build vllm using python 3.14
+#      ansible.builtin.shell: |
+#        # Explicitly load the ROCm environment variables we added earlier
+#
+#        # Execute the build script
+#        /home/llm/scripts/build-vllm.sh
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Skip this task if the final compiled binary already exists.
+#        # (Adjust this path if your script outputs the binary somewhere else)
+#        creates: /home/llm/.vllm/bin/activate
+#      become: true
+#      become_user: llm
 
     - name: Read HF_TOKEN from VM's environment file
       ansible.builtin.shell: grep HF_TOKEN /etc/environment | cut -d'=' -f2 | tr -d '"'
@@ -308,39 +308,39 @@
       become: true
       become_user: llm
 #
-    - name: Download Qwen3.8 Q6 model via wget
-      ansible.builtin.shell: |
-        # Define the direct URL for the specific GGUF file
-        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
-
-        # Download using wget with Authorization header
-        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-             -O "${OUTPUT_FILE}" \
-             "${MODEL_URL}"
-      args:
-        executable: /bin/bash
-        # Idempotency: Only run if the file does NOT exist
-        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
-      become: true
-      become_user: llm
+#    - name: Download Qwen3.8 Q6 model via wget
+#      ansible.builtin.shell: |
+#        # Define the direct URL for the specific GGUF file
+#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q6_K_XL.gguf"
+#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf"
 #
-    - name: Download Qwen3.8 Q8 model via wget
-      ansible.builtin.shell: |
-        # Define the direct URL for the specific GGUF file
-        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
-
-        # Download using wget with Authorization header
-        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
-             -O "${OUTPUT_FILE}" \
-             "${MODEL_URL}"
-      args:
-        executable: /bin/bash
-        # Idempotency: Only run if the file does NOT exist
-        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
-      become: true
-      become_user: llm
+#        # Download using wget with Authorization header
+#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+#             -O "${OUTPUT_FILE}" \
+#             "${MODEL_URL}"
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Only run if the file does NOT exist
+#        creates: /mnt/models/Qwen3.8-27B-UD-Q6_K_XL.gguf
+#      become: true
+#      become_user: llm
+#
+#    - name: Download Qwen3.8 Q8 model via wget
+#      ansible.builtin.shell: |
+#        # Define the direct URL for the specific GGUF file
+#        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+#        OUTPUT_FILE="/mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf"
+#
+#        # Download using wget with Authorization header
+#        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+#             -O "${OUTPUT_FILE}" \
+#             "${MODEL_URL}"
+#      args:
+#        executable: /bin/bash
+#        # Idempotency: Only run if the file does NOT exist
+#        creates: /mnt/models/Qwen3.8-27B-UD-Q8_K_XL.gguf
+#      become: true
+#      become_user: llm
 #
 #    - name: Download Qwen3.8-Flash Q4 model via wget (all chunks)
 #      ansible.builtin.shell: |
@@ -547,7 +547,7 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=llama.cpp Vulkan server (port {{ item.port }}, GPU {{ item.device }})
+          Description=llama.cpp server (port {{ item.port }}, GPU {{ item.device }})
           After=network-online.target mnt-models.mount
           Wants=network-online.target
 
@@ -565,10 +565,10 @@
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: vulkan, context: 262144 }
-        - { port: 8002, device: 1, api: vulkan, context: 262144 }
-        - { port: 8003, device: 2, api: vulkan, context: 262144 }
-        - { port: 8004, device: 3, api: vulkan, context: 262144 }
+        - { port: 8001, device: 0, api: vulkan, context: 131072 }
+        - { port: 8002, device: 1, api: vulkan, context: 131072 }
+        - { port: 8003, device: 2, api: vulkan, context: 131072 }
+        - { port: 8004, device: 3, api: vulkan, context: 131072 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,

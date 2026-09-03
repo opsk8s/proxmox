@@ -66,3 +66,7 @@ variable "elk_ip" {
 variable "grafana_admin_password" {
   type = string
 }
+
+variable "keyboard_layout" {
+  type = string
+}

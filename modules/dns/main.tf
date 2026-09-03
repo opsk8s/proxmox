@@ -8,7 +8,7 @@
 # (PVE cloud-init bakes that into their netplan on every boot); non-VM LAN
 # devices get it via the router's DHCP DNS option (set it to 192.168.51.210).
 #
-# Endpoints once running (192.168.51.210:53): postgres.lan, grafana.lan,
+# Endpoints once running (192.168.51.220:53): postgres.lan, grafana.lan,
 # kibana.lan, jenkins.lan, open-webui.lan, elasticsearch.lan, ...
 #
 # WARNING: same cloud-init seed caveat as the other VMs —
@@ -30,7 +30,7 @@ resource "proxmox_virtual_environment_file" "dns_config" {
 resource "proxmox_virtual_environment_vm" "dns_vm" {
   name            = "dns"
   node_name       = var.main_node
-  vm_id           = 210
+  vm_id           = 220
   tags            = ["dns", "dnsmasq"]
   stop_on_destroy = true
 
@@ -63,7 +63,7 @@ resource "proxmox_virtual_environment_vm" "dns_vm" {
   }
 
   memory {
-    dedicated = 512
+    dedicated = 1024
   }
 
   disk {
@@ -78,7 +78,7 @@ resource "proxmox_virtual_environment_vm" "dns_vm" {
     bridge = "vmbr0"
   }
 
-  keyboard_layout = "de-ch"
+  keyboard_layout = var.keyboard_layout
 
   # first up so the rest of the LAN can resolve while the host boots
   startup {

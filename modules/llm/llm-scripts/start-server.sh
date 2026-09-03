@@ -303,7 +303,6 @@ LLAMA_CMD+=(
     --n-gpu-layers 999
     --n-gpu-layers-draft 999
     --cache-ram 8192
-    --cache-reuse 4096
     --load-mode dio
     --metrics
 )

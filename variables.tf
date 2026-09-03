@@ -127,3 +127,8 @@ variable "dns_ip" {
   description = "IP of the private DNS (dnsmasq) VM"
 }
 
+variable "keyboard_layout" {
+  type        = string
+  description = "Keyboard layout for the VM consoles (e.g. de-ch)"
+}
+

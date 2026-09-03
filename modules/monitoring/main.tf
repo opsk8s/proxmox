@@ -70,7 +70,7 @@ resource "proxmox_virtual_environment_vm" "monitoring_vm" {
     bridge = "vmbr0"
   }
 
-  keyboard_layout = "de-ch"
+  keyboard_layout = var.keyboard_layout
 
   startup {
     order = 5

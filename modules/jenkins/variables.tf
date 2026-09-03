@@ -45,3 +45,7 @@ variable "dns_ip" {
 variable "jenkins_agent_ip" {
   type = string
 }
+
+variable "keyboard_layout" {
+  type = string
+}

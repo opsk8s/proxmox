@@ -66,7 +66,7 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
   network_device {
     bridge = "vmbr0"
   }
-  keyboard_layout = "de-ch"
+  keyboard_layout = var.keyboard_layout
 
   depends_on = [
     proxmox_virtual_environment_file.jenkins_config

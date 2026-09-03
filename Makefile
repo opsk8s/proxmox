@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-exporters
+.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-exporters
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
@@ -70,6 +70,22 @@ deploy-monitoring:
 deploy-elk:
 	$(ANSIBLE_PLAYBOOK) -i modules/elk/inventory.ini modules/elk/ansible.yml \
 		--extra-vars "ansible_host=$(call tfvar,elk_ip)"
+
+# DNS VM (dnsmasq, *.lan records + DoT upstreams). Also runs automatically
+# via the Terraform action trigger when the VM is created or updated.
+deploy-dns:
+	$(ANSIBLE_PLAYBOOK) -i modules/dns/inventory.ini modules/dns/ansible.yml \
+		--extra-vars "ansible_host=$(call tfvar,dns_ip) \
+		dns_ip=$(call tfvar,dns_ip) \
+		pve_ip=$(call tfvar,pve_ip) \
+		llm_ip=$(call tfvar,llm_ip) \
+		jenkins_ip=$(call tfvar,jenkins_ip) \
+		jenkins_agent_ip=$(call tfvar,jenkins_agent_ip) \
+		open_webui_ip=$(call tfvar,open_webui_ip) \
+		postgres_ip=$(call tfvar,postgres_ip) \
+		monitoring_ip=$(call tfvar,monitoring_ip) \
+		elk_ip=$(call tfvar,elk_ip) \
+		lan_gateway=$(call tfvar,lan_gateway)"
 
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
 # Jenkins prometheus plugin). Idempotent — run after the service playbooks.

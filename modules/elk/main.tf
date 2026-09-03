@@ -77,7 +77,7 @@ resource "proxmox_virtual_environment_vm" "elk_vm" {
     bridge = "vmbr0"
   }
 
-  keyboard_layout = "de-ch"
+  keyboard_layout = var.keyboard_layout
 
   startup {
     order = 5

@@ -70,3 +70,7 @@ variable "monitoring_ip" {
 variable "elk_ip" {
   type = string
 }
+
+variable "keyboard_layout" {
+  type = string
+}

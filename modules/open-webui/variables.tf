@@ -41,3 +41,7 @@ variable "dns_ip" {
 variable "llm_ip" {
   type = string
 }
+
+variable "keyboard_layout" {
+  type = string
+}

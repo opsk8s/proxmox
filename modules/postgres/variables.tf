@@ -49,3 +49,7 @@ variable "lan_gateway" {
 variable "dns_ip" {
   type = string
 }
+
+variable "keyboard_layout" {
+  type = string
+}

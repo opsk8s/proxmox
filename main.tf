@@ -38,6 +38,7 @@ module "llm" {
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
   dns_ip               = var.dns_ip
+  keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -56,6 +57,7 @@ module "jenkins" {
   lan_gateway            = var.lan_gateway
   dns_ip                 = var.dns_ip
   jenkins_agent_ip       = var.jenkins_agent_ip
+  keyboard_layout        = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -72,6 +74,7 @@ module "jenkins_agent" {
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
   dns_ip               = var.dns_ip
+  keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -89,6 +92,7 @@ module "open_webui" {
   lan_gateway          = var.lan_gateway
   dns_ip               = var.dns_ip
   llm_ip               = var.llm_ip
+  keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -108,6 +112,7 @@ module "postgres" {
   lan_network               = var.lan_network
   lan_gateway               = var.lan_gateway
   dns_ip                    = var.dns_ip
+  keyboard_layout           = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -131,6 +136,7 @@ module "monitoring" {
   open_webui_ip          = var.open_webui_ip
   postgres_ip            = var.postgres_ip
   elk_ip                 = var.elk_ip
+  keyboard_layout        = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -147,6 +153,7 @@ module "elk" {
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
   dns_ip               = var.dns_ip
+  keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
@@ -171,6 +178,7 @@ module "dns" {
   postgres_ip          = var.postgres_ip
   monitoring_ip        = var.monitoring_ip
   elk_ip               = var.elk_ip
+  keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
 }
