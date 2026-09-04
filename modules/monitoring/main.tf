@@ -97,6 +97,7 @@ action "ansible_playbook_run" "configure_monitoring" {
     extra_vars = {
       grafana_admin_password = var.grafana_admin_password
       ansible_host           = var.lan_ip
+      dns_ip                 = var.dns_ip
       llm_ip                 = var.llm_ip
       jenkins_ip             = var.jenkins_ip
       jenkins_agent_ip       = var.jenkins_agent_ip

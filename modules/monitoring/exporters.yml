@@ -1,14 +1,15 @@
 ---
 # Installs the scrape targets on every VM:
-#   - node_exporter on all 6 VMs (CPU, RAM, disk, network, filesystem)
+#   - node_exporter on all 7 VMs (CPU, RAM, disk, network, filesystem)
 #   - AMD GPU textfile collector on llm-ubuntu (util, VRAM, temp, power)
+#   - unbound resolver stats textfile collector on dns
 #   - postgres_exporter on postgres
 #   - Jenkins prometheus plugin on the jenkins controller
 # (open-webui and elk have no native metrics endpoint — they are probed by
 #  blackbox_exporter on the monitoring VM, nothing to install beyond
 #  node_exporter)
 - name: Install metrics exporters
-  hosts: llm:jenkins:jenkins-agent:open-webui:postgres:elk
+  hosts: llm:jenkins:jenkins-agent:open-webui:postgres:elk:dns
   become: true
   gather_facts: false
   vars:
@@ -157,6 +158,71 @@
       changed_when: false
       failed_when: gpu_metrics_check.stdout | int == 0
       when: "'llm' in group_names"
+
+    # --- unbound resolver stats collector (dns only) --------------------------
+    - name: Deploy unbound metrics collector
+      ansible.builtin.copy:
+        src: dashboards/unbound-metrics.py
+        dest: /usr/local/bin/unbound-metrics.py
+        owner: root
+        group: root
+        mode: "0755"
+      when: "'dns' in group_names"
+
+    - name: Deploy unbound-metrics oneshot service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/unbound-metrics.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Unbound resolver metrics collector (node_exporter textfile)
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/bin/python3 /usr/local/bin/unbound-metrics.py
+      when: "'dns' in group_names"
+
+    - name: Deploy unbound-metrics timer (15s)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/unbound-metrics.timer
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Run unbound metrics collector every 15 seconds
+
+          [Timer]
+          OnBootSec=30s
+          OnUnitActiveSec=15s
+          AccuracySec=1s
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      when: "'dns' in group_names"
+
+    - name: Enable and start unbound-metrics timer
+      ansible.builtin.systemd:
+        name: unbound-metrics.timer
+        state: started
+        enabled: true
+      when: "'dns' in group_names"
+
+    - name: Run unbound collector once and verify the textfile
+      ansible.builtin.command:
+        cmd: /usr/bin/python3 /usr/local/bin/unbound-metrics.py
+      when: "'dns' in group_names"
+
+    - name: Verify unbound textfile has metrics
+      ansible.builtin.command:
+        cmd: grep -c '^unbound_' /var/lib/node_exporter/textfile_collector/unbound.prom
+      register: unbound_metrics_check
+      changed_when: false
+      failed_when: unbound_metrics_check.stdout | int == 0
+      when: "'dns' in group_names"
 
     # --- postgres_exporter (postgres only) -----------------------------------
     - name: Detect installed PostgreSQL major version

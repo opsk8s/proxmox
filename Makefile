@@ -58,6 +58,7 @@ deploy-monitoring:
 	$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini modules/monitoring/ansible.yml \
 		--extra-vars "grafana_admin_password=$(call tfvar,grafana_admin_password) \
 		ansible_host=$(call tfvar,monitoring_ip) \
+		dns_ip=$(call tfvar,dns_ip) \
 		llm_ip=$(call tfvar,llm_ip) \
 		jenkins_ip=$(call tfvar,jenkins_ip) \
 		jenkins_agent_ip=$(call tfvar,jenkins_agent_ip) \
@@ -98,7 +99,8 @@ deploy-exporters:
 		"jenkins-agent $(call tfvar,jenkins_agent_ip)" \
 		"open-webui $(call tfvar,open_webui_ip)" \
 		"postgres $(call tfvar,postgres_ip)" \
-		"elk $(call tfvar,elk_ip)"; do \
+		"elk $(call tfvar,elk_ip)" \
+		"dns $(call tfvar,dns_ip)"; do \
 		group=$${entry%% *}; ip=$${entry##* }; \
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \

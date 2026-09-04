@@ -44,6 +44,8 @@
               labels: {instance_name: "postgres"}
             - targets: ["{{ elk_ip }}:9100"]
               labels: {instance_name: "elk"}
+            - targets: ["{{ dns_ip }}:9100"]
+              labels: {instance_name: "dns"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -81,6 +83,22 @@
             - target_label: __address__
               replacement: 127.0.0.1:9115
 
+        # end-to-end DNS availability: dnsmasq :53 -> unbound -> DoT upstream
+        - job_name: dns
+          metrics_path: /probe
+          params:
+            module: [dns_udp]
+          static_configs:
+            - targets: ["{{ dns_ip }}:53"]
+              labels: {instance_name: "dns"}
+          relabel_configs:
+            - source_labels: [__address__]
+              target_label: __param_target
+            - source_labels: [__param_target]
+              target_label: instance
+            - target_label: __address__
+              replacement: 127.0.0.1:9115
+
     blackbox_config: |
       modules:
         http_2xx:
@@ -89,6 +107,15 @@
           http:
             valid_status_codes: [200, 201, 204]
             method: GET
+
+        dns_udp:
+          prober: dns
+          timeout: 5s
+          dns:
+            query_name: example.com
+            query_type: A
+            transport_protocol: udp
+            preferred_ip_protocol: ip4
 
     grafana_datasource: |
       apiVersion: 1

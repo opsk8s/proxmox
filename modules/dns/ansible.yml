@@ -131,6 +131,10 @@
               username: unbound
               directory: /etc/unbound
 
+              # per-query-type and per-rcode counters for the metrics
+              # collector (absent from plain stats_noreset output otherwise)
+              extended-statistics: yes
+
               auto-trust-anchor-file: /var/lib/unbound/root.autotrust
 
               # Required for forwarder certificate verification (auth-name
@@ -143,6 +147,17 @@
               port: 5353
 
               access-control: 127.0.0.1/32 allow
+
+          # Loopback-only control channel so unbound-control (metrics
+          # collector on this host) can query stats. Uses the distro unix
+          # socket /run/unbound.ctl — NOT the TCP channel: the latter needs
+          # TLS key/cert files that Ubuntu's AppArmor profile for unbound
+          # (enforce) denies the daemon from loading (dac_override denied,
+          # unbound refuses to start). The socket needs no keys and matches
+          # the profile (/run/unbound.ctl rw).
+          remote-control:
+              control-enable: yes
+              control-interface: /run/unbound.ctl
 
           forward-zone:
               name: "."
@@ -170,6 +185,13 @@
         name: unbound
         state: started
         enabled: true
+
+    - name: Verify unbound-control answers
+      ansible.builtin.command:
+        cmd: unbound-control status
+      register: unbound_control_status
+      changed_when: false
+      failed_when: unbound_control_status.rc != 0
 
     # ------------------------------------------------------------------
     # dnsmasq
