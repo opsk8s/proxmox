@@ -1,0 +1,68 @@
+[
+  {
+    "type": "xy",
+    "title": "Request rate",
+    "description": "all proxied requests per time bucket (json_analytics access log)",
+    "filters": [],
+    "layers": [
+      {
+        "type": "area",
+        "data_source": { "type": "data_view_spec", "index_pattern": "nginx-access-*", "time_field": "@timestamp" },
+        "x": { "operation": "date_histogram", "field": "@timestamp" },
+        "y": [
+          { "operation": "count", "label": "requests" }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "xy",
+    "title": "Response time (s)",
+    "description": "avg/max nginx request_time across all virtual hosts",
+    "filters": [],
+    "layers": [
+      {
+        "type": "line",
+        "data_source": { "type": "data_view_spec", "index_pattern": "nginx-access-*", "time_field": "@timestamp" },
+        "x": { "operation": "date_histogram", "field": "@timestamp" },
+        "y": [
+          { "operation": "average", "field": "request_time", "label": "avg s" },
+          { "operation": "max", "field": "request_time", "label": "max s" }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "xy",
+    "title": "Upstream response time (s)",
+    "description": "avg upstream_response_time (time spent in the backend service)",
+    "filters": [],
+    "layers": [
+      {
+        "type": "line",
+        "data_source": { "type": "data_view_spec", "index_pattern": "nginx-access-*", "time_field": "@timestamp" },
+        "x": { "operation": "date_histogram", "field": "@timestamp" },
+        "y": [
+          { "operation": "average", "field": "upstream_response_time", "label": "avg s" },
+          { "operation": "max", "field": "upstream_response_time", "label": "max s" }
+        ]
+      }
+    ]
+  },
+  {
+    "type": "xy",
+    "title": "Bytes sent",
+    "description": "total body_bytes_sent per time bucket (bytes)",
+    "filters": [],
+    "layers": [
+      {
+        "type": "area",
+        "data_source": { "type": "data_view_spec", "index_pattern": "nginx-access-*", "time_field": "@timestamp" },
+        "x": { "operation": "date_histogram", "field": "@timestamp" },
+        "y": [
+          { "operation": "sum", "field": "body_bytes_sent", "label": "bytes" }
+        ]
+      }
+    ]
+  }
+]

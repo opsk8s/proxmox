@@ -63,6 +63,10 @@ variable "elk_ip" {
   type = string
 }
 
+variable "nginx_ip" {
+  type = string
+}
+
 variable "grafana_admin_password" {
   type = string
 }

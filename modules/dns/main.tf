@@ -114,6 +114,7 @@ action "ansible_playbook_run" "configure_dns" {
       postgres_ip      = var.postgres_ip
       monitoring_ip    = var.monitoring_ip
       elk_ip           = var.elk_ip
+      nginx_ip         = var.nginx_ip
       lan_gateway      = var.lan_gateway
     }
   }

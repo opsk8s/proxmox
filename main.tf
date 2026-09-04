@@ -148,6 +148,7 @@ module "monitoring" {
   open_webui_ip          = var.open_webui_ip
   postgres_ip            = var.postgres_ip
   elk_ip                 = var.elk_ip
+  nginx_ip               = var.nginx_ip
   keyboard_layout        = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -194,9 +195,34 @@ module "dns" {
   postgres_ip          = var.postgres_ip
   monitoring_ip        = var.monitoring_ip
   elk_ip               = var.elk_ip
+  nginx_ip             = var.nginx_ip
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
+}
+
+module "nginx" {
+  source               = "./modules/nginx"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.nginx_cpu_cores
+  memory_mb            = var.nginx_memory_mb
+  lan_ip               = var.nginx_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+  elk_ip               = var.elk_ip
+  monitoring_ip        = var.monitoring_ip
+  jenkins_ip           = var.jenkins_ip
+  open_webui_ip        = var.open_webui_ip
+  llm_ip               = var.llm_ip
+  keyboard_layout      = var.keyboard_layout
+
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
 #  zpool import -f os-ssd-fast

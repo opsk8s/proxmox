@@ -17,7 +17,9 @@ Kibana 9 notes (all verified against the running 9.5.2 install):
 Idempotent: re-running deletes the managed lenses (by exact title) and
 recreates everything, then rewrites the dashboard with the fresh lens ids.
 
-Usage: python3 build_kibana_content.py <kibana_base_url> <definitions_dir>
+Usage: python3 build_kibana_content.py <kibana_base_url> <definitions_dir> [lenses_file] [dashboard_file]
+(lenses_file/dashboard_file default to llm-lenses.json / llm-dashboard.json —
+the playbook runs it once per dashboard definition pair.)
 Stdlib only — safe on the ELK VM without extra packages.
 """
 import json
@@ -49,8 +51,10 @@ def req(base, path, method="GET", body=None):
 def main():
     base = sys.argv[1].rstrip("/")
     defs_dir = sys.argv[2]
-    lenses = json.load(open(f"{defs_dir}/llm-lenses.json"))
-    dash = json.load(open(f"{defs_dir}/llm-dashboard.json"))
+    lenses_file = sys.argv[3] if len(sys.argv) > 3 else "llm-lenses.json"
+    dash_file = sys.argv[4] if len(sys.argv) > 4 else "llm-dashboard.json"
+    lenses = json.load(open(f"{defs_dir}/{lenses_file}"))
+    dash = json.load(open(f"{defs_dir}/{dash_file}"))
 
     # 1. Data view (fixed id so references stay stable across runs)
     st, body = req(

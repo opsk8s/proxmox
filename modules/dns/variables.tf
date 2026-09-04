@@ -71,6 +71,10 @@ variable "elk_ip" {
   type = string
 }
 
+variable "nginx_ip" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

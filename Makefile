@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-exporters
+.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
@@ -64,7 +64,8 @@ deploy-monitoring:
 		jenkins_agent_ip=$(call tfvar,jenkins_agent_ip) \
 		open_webui_ip=$(call tfvar,open_webui_ip) \
 		postgres_ip=$(call tfvar,postgres_ip) \
-		elk_ip=$(call tfvar,elk_ip)"
+		elk_ip=$(call tfvar,elk_ip) \
+		nginx_ip=$(call tfvar,nginx_ip)"
 
 # ELK VM (Elasticsearch + Kibana). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
@@ -88,6 +89,18 @@ deploy-dns:
 		elk_ip=$(call tfvar,elk_ip) \
 		lan_gateway=$(call tfvar,lan_gateway)"
 
+# Reverse-proxy VM (nginx, vhosts for every service, JSON access log shipped
+# by Filebeat to the ELK VM). Also runs automatically
+# via the Terraform action trigger when the VM is created or updated.
+deploy-nginx:
+	$(ANSIBLE_PLAYBOOK) -i modules/nginx/inventory.ini modules/nginx/ansible.yml \
+		--extra-vars "ansible_host=$(call tfvar,nginx_ip) \
+		elk_ip=$(call tfvar,elk_ip) \
+		monitoring_ip=$(call tfvar,monitoring_ip) \
+		jenkins_ip=$(call tfvar,jenkins_ip) \
+		open_webui_ip=$(call tfvar,open_webui_ip) \
+		llm_ip=$(call tfvar,llm_ip)"
+
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
 # Jenkins prometheus plugin). Idempotent — run after the service playbooks.
 # The play is multi-host, but Ansible extra vars are global and inventory
@@ -100,7 +113,8 @@ deploy-exporters:
 		"open-webui $(call tfvar,open_webui_ip)" \
 		"postgres $(call tfvar,postgres_ip)" \
 		"elk $(call tfvar,elk_ip)" \
-		"dns $(call tfvar,dns_ip)"; do \
+		"dns $(call tfvar,dns_ip)" \
+		"nginx $(call tfvar,nginx_ip)"; do \
 		group=$${entry%% *}; ip=$${entry##* }; \
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \

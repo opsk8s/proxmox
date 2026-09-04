@@ -127,6 +127,11 @@ variable "dns_ip" {
   description = "IP of the private DNS (dnsmasq) VM"
 }
 
+variable "nginx_ip" {
+  type        = string
+  description = "IP of the NGINX reverse proxy VM"
+}
+
 variable "keyboard_layout" {
   type        = string
   description = "Keyboard layout for the VM consoles (e.g. de-ch)"
@@ -211,5 +216,15 @@ variable "dns_cpu_cores" {
 variable "dns_memory_mb" {
   type    = number
   default = 1024
+}
+
+variable "nginx_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "nginx_memory_mb" {
+  type    = number
+  default = 2048
 }
 

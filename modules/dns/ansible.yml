@@ -31,6 +31,17 @@
       - "address=/elk.lan/{{ elk_ip }}"
       - "address=/kibana.lan/{{ elk_ip }}"
       - "address=/elasticsearch.lan/{{ elk_ip }}"
+      # NGINX reverse proxy: nginx.lan is the box itself, app.*.lan are the
+      # per-service virtual hosts (all served by nginx)
+      - "address=/nginx.lan/{{ nginx_ip }}"
+      - "address=/app.kibana.lan/{{ nginx_ip }}"
+      - "address=/app.elk.lan/{{ nginx_ip }}"
+      - "address=/app.elastic.lan/{{ nginx_ip }}"
+      - "address=/app.grafana.lan/{{ nginx_ip }}"
+      - "address=/app.prometheus.lan/{{ nginx_ip }}"
+      - "address=/app.jenkins.lan/{{ nginx_ip }}"
+      - "address=/app.open-webui.lan/{{ nginx_ip }}"
+      - "address=/app.llm.lan/{{ nginx_ip }}"
 
   tasks:
     - name: Wait for SSH (first boot)

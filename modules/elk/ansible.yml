@@ -38,6 +38,31 @@
         mappings:
           properties: {}
 
+    # Indices: Filebeat on the nginx VM ships the JSON access log into
+    # nginx-access-YYYY.MM.dd (see modules/nginx/ansible.yml).
+    nginx_ilm_policy:
+      policy:
+        phases:
+          hot:
+            min_age: 0ms
+            actions: {}
+          delete:
+            min_age: 14d
+            actions:
+              delete: {}
+
+    nginx_index_template:
+      index_patterns:
+        - nginx-access-*
+      priority: 200
+      template:
+        settings:
+          index.number_of_shards: 1
+          index.number_of_replicas: 0
+          index.lifecycle.name: nginx-access-14d
+        mappings:
+          properties: {}
+
     # ----------------------------------------------------------------------------
     # Ingest pipeline for llama-server slot/timing lines.
     #
@@ -457,6 +482,22 @@
         body: "{{ llama_pipeline | to_nice_json }}"
         status_code: 200
 
+    - name: Deploy nginx ILM policy (14d hot, then delete)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_ilm/policy/nginx-access-14d"
+        method: PUT
+        body_format: json
+        body: "{{ nginx_ilm_policy | to_nice_json }}"
+        status_code: 200
+
+    - name: Deploy nginx index template (nginx-access-*)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_index_template/nginx-access"
+        method: PUT
+        body_format: json
+        body: "{{ nginx_index_template | to_nice_json }}"
+        status_code: 200
+
     # ES 9 _simulate response shape: docs[0].doc._source (doc_out is gone).
     - name: Sanity-check pipeline against a real slot log line
       ansible.builtin.uri:
@@ -559,6 +600,8 @@
       loop:
         - llm-lenses.json
         - llm-dashboard.json
+        - nginx-lenses.json
+        - nginx-dashboard.json
         - build_kibana_content.py
 
     - name: Build LLM Observability data view, charts and dashboard
@@ -570,3 +613,13 @@
     - name: Show Kibana content build result
       ansible.builtin.debug:
         var: kibana_content.stdout_lines
+
+    - name: Build NGINX Proxy Analytics data view, charts and dashboard
+      ansible.builtin.command:
+        cmd: python3 /usr/local/share/kibana-llm-content/build_kibana_content.py http://127.0.0.1:5601 /usr/local/share/kibana-llm-content nginx-lenses.json nginx-dashboard.json
+      register: kibana_nginx_content
+      changed_when: true
+
+    - name: Show NGINX Kibana content build result
+      ansible.builtin.debug:
+        var: kibana_nginx_content.stdout_lines

@@ -104,6 +104,7 @@ action "ansible_playbook_run" "configure_monitoring" {
       open_webui_ip          = var.open_webui_ip
       postgres_ip            = var.postgres_ip
       elk_ip                 = var.elk_ip
+      nginx_ip               = var.nginx_ip
     }
   }
 }

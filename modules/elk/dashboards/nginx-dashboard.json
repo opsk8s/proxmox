@@ -1,0 +1,14 @@
+{
+  "id": "nginx-proxy-analytics",
+  "title": "NGINX Proxy Analytics",
+  "description": "Reverse proxy request plane: rate, latency, bytes per virtual host. Data view: NGINX Access (nginx-access-*)",
+  "data_view_id": "nginx-access-data-view",
+  "data_view_title": "NGINX Access",
+  "data_view_pattern": "nginx-access-*",
+  "panels": [
+    { "title": "Request rate", "x": 0, "y": 0, "w": 24, "h": 10 },
+    { "title": "Response time (s)", "x": 0, "y": 10, "w": 12, "h": 10 },
+    { "title": "Upstream response time (s)", "x": 12, "y": 10, "w": 12, "h": 10 },
+    { "title": "Bytes sent", "x": 0, "y": 20, "w": 24, "h": 10 }
+  ]
+}

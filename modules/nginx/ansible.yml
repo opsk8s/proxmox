@@ -1,0 +1,457 @@
+---
+# Reverse proxy for every service in this repo:
+#   app.kibana.lan / app.elk.lan       -> elk:5601
+#   app.elastic.lan                    -> elk:9200
+#   app.grafana.lan                    -> monitoring:3000
+#   app.prometheus.lan                 -> monitoring:9090
+#   app.jenkins.lan                    -> jenkins:8080
+#   app.open-webui.lan                 -> open-webui:8080
+#   app.llm.lan                        -> llm:8001-8004 (round robin)
+#
+# Every request is recorded with the json_analytics log format (one JSON
+# object per line). Filebeat on this VM ships /var/log/nginx/access.log to
+# Elasticsearch on the ELK VM (indices nginx-access-*, 14d ILM — both owned
+# by modules/elk/ansible.yml).
+- name: Deploy NGINX reverse proxy (VM)
+  hosts: nginx
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    # All service IPs arrive via extra_vars from Terraform (proxmox.tfvars)
+
+    # --- http-context config ---------------------------------------------------
+    # log_format json_analytics: one JSON object per request. escape=json
+    # keeps the line valid JSON when $request/$http_user_agent contain quotes.
+    # access_log is set globally (http context) so every vhost — including
+    # the default_server catch-all — is recorded.
+    logging_config: |
+      log_format json_analytics escape=json '{'
+          '"host":"$host",'
+          '"time_local":"$time_local",'
+          '"remote_addr":"$remote_addr",'
+          '"remote_user":"$remote_user",'
+          '"request":"$request",'
+          '"status": "$status",'
+          '"body_bytes_sent":"$body_bytes_sent",'
+          '"request_time":"$request_time",'
+          '"http_referrer":"$http_referer",'
+          '"http_user_agent":"$http_user_agent",'
+          '"http_x_forwarded_for":"$http_x_forwarded_for",'
+          '"upstream_addr":"$upstream_addr",'
+          '"upstream_response_time":"$upstream_response_time",'
+          '"upstream_status":"$upstream_status",'
+          '"request_id":"$request_id"'
+      '}';
+
+      access_log /var/log/nginx/access.log json_analytics;
+
+    # WebSocket upgrade handshake (Jenkins agent tunnel, Kibana, Grafana,
+    # Open WebUI, llama-server webui) needs Connection: upgrade only when
+    # the client sent Upgrade: websocket — hence the map.
+    websocket_config: |
+      map $http_upgrade $connection_upgrade {
+          default upgrade;
+          ''      close;
+      }
+
+    # --- virtual hosts -----------------------------------------------------------
+    default_vhost: |
+      server {
+          listen 80 default_server;
+          server_name _;
+
+          return 200 "nginx proxy alive\n";
+          add_header Content-Type text/plain;
+      }
+
+    kibana_vhost: |
+      server {
+          listen 80;
+          server_name app.kibana.lan app.elk.lan;
+
+          location / {
+              proxy_pass http://{{ elk_ip }}:5601;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    elasticsearch_vhost: |
+      server {
+          listen 80;
+          server_name app.elastic.lan;
+
+          location / {
+              proxy_pass http://{{ elk_ip }}:9200;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+    grafana_vhost: |
+      server {
+          listen 80;
+          server_name app.grafana.lan;
+
+          location / {
+              proxy_pass http://{{ monitoring_ip }}:3000;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    prometheus_vhost: |
+      server {
+          listen 80;
+          server_name app.prometheus.lan;
+
+          location / {
+              proxy_pass http://{{ monitoring_ip }}:9090;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+      }
+
+    jenkins_vhost: |
+      server {
+          listen 80;
+          server_name app.jenkins.lan;
+
+          location / {
+              proxy_pass http://{{ jenkins_ip }}:8080;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              # long-lived: agent sessions and builds stream for minutes
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+          }
+      }
+
+    open_webui_vhost: |
+      server {
+          listen 80;
+          server_name app.open-webui.lan;
+
+          location / {
+              proxy_pass http://{{ open_webui_ip }}:8080;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    # llama-server: round robin over the four per-GPU instances. Buffering is
+    # off so SSE token streams are flushed to the client as they arrive.
+    llm_vhost: |
+      upstream llm_pool {
+          server {{ llm_ip }}:8001;
+          server {{ llm_ip }}:8002;
+          server {{ llm_ip }}:8003;
+          server {{ llm_ip }}:8004;
+      }
+
+      server {
+          listen 80;
+          server_name app.llm.lan;
+
+          location / {
+              proxy_pass http://llm_pool;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_buffering off;
+              # generations can run for minutes
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+          }
+      }
+
+    # --- Filebeat ------------------------------------------------------------------
+    filebeat_config: |
+      filebeat.inputs:
+        # nginx JSON access log (log_format json_analytics). One JSON object
+        # per line — the json codec decodes it into top-level fields.
+        - type: filestream
+          id: nginx-access-logs
+          paths:
+            - /var/log/nginx/access.log
+          format: json
+          json:
+            keys_under_root: true
+          fields:
+            source: nginx
+          fields_under_root: true
+
+      processors:
+        # time_local: "04/Sep/2026:12:34:56 +0200" (nginx default time format)
+        - timestamp:
+            fields: ["time_local"]
+            layouts:
+              - "02/Jan/2006:15:04:05 -0700"
+            target_field: "@timestamp"
+        # nginx emits every value as a string; the dashboards need numbers
+        # (upstream_response_time is "-" for non-proxied requests — the
+        # failure is expected and ignored).
+        - convert:
+            fields:
+              - name: request_time
+                type: string
+                to: double
+              - name: upstream_response_time
+                type: string
+                to: double
+              - name: body_bytes_sent
+                type: string
+                to: long
+            ignore_failure: true
+
+      output.elasticsearch:
+        hosts: ["http://{{ elk_ip }}:9200"]
+        index: "nginx-access-%{+yyyy.MM.dd}"
+
+      # Local-only health/monitoring endpoint (checked by the playbook).
+      http:
+        host: 127.0.0.1
+        port: 5066
+
+      # Index template and ILM policy are owned by the ELK VM
+      # (modules/elk/ansible.yml) — Filebeat must not create its own.
+      setup:
+        template:
+          enabled: false
+        ilm:
+          enabled: false
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: nginx-ubuntu
+
+    - name: Install nginx
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - nginx
+        state: present
+
+    # The distro default site owns 80 default_server and would collide with
+    # ours — remove it.
+    - name: Remove distro default site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Deploy JSON access log format (http context)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/10-logging.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ logging_config }}"
+
+    - name: Deploy websocket upgrade map (http context)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/20-websocket.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ websocket_config }}"
+
+    - name: Deploy virtual hosts
+      ansible.builtin.copy:
+        dest: "/etc/nginx/sites-available/{{ item.file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - { file: "00-default.conf", content: "{{ default_vhost }}" }
+        - { file: "app-kibana.conf", content: "{{ kibana_vhost }}" }
+        - { file: "app-elasticsearch.conf", content: "{{ elasticsearch_vhost }}" }
+        - { file: "app-grafana.conf", content: "{{ grafana_vhost }}" }
+        - { file: "app-prometheus.conf", content: "{{ prometheus_vhost }}" }
+        - { file: "app-jenkins.conf", content: "{{ jenkins_vhost }}" }
+        - { file: "app-open-webui.conf", content: "{{ open_webui_vhost }}" }
+        - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
+
+    - name: Enable virtual hosts
+      ansible.builtin.file:
+        src: "/etc/nginx/sites-available/{{ item }}"
+        dest: "/etc/nginx/sites-enabled/{{ item }}"
+        state: link
+      loop:
+        - 00-default.conf
+        - app-kibana.conf
+        - app-elasticsearch.conf
+        - app-grafana.conf
+        - app-prometheus.conf
+        - app-jenkins.conf
+        - app-open-webui.conf
+        - app-llm.conf
+
+    - name: Check nginx configuration syntax
+      ansible.builtin.command:
+        cmd: nginx -t
+      changed_when: false
+
+    - name: Enable and start nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: started
+        enabled: true
+
+    - name: Wait for nginx to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 80
+        timeout: 60
+
+    - name: Verify the default server answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/"
+        status_code: 200
+        timeout: 10
+      register: nginx_default
+      until: nginx_default.status == 200
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: "Verify a vhost proxies (Host: app.kibana.lan)"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1/api/status"
+        header:
+          Host: app.kibana.lan
+        status_code: [200]
+        timeout: 30
+      register: nginx_kibana
+      until: nginx_kibana.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # --- Filebeat (JSON access log -> Elasticsearch) ------------------------------
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Fetch Elastic GPG key
+      ansible.builtin.shell:
+        cmd: curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
+        creates: /etc/apt/keyrings/elasticsearch.gpg
+
+    - name: Add Elastic APT repository (9.x)
+      ansible.builtin.deb822_repository:
+        name: elastic
+        types: deb
+        uris: https://artifacts.elastic.co/packages/9.x/apt
+        suites: stable
+        components: [main]
+        signed_by: /etc/apt/keyrings/elasticsearch.gpg
+        state: present
+
+    # Hard-fail on update errors (the apt module can swallow them — see the
+    # same task in modules/elk/ansible.yml for the incident this prevents).
+    - name: Update apt cache (hard failure on error)
+      ansible.builtin.shell: apt-get update -qq
+      changed_when: false
+      register: apt_update
+      failed_when: apt_update.rc != 0
+
+    - name: Install Filebeat (9.x)
+      ansible.builtin.apt:
+        update_cache: false
+        name:
+          - filebeat=9.*
+        state: present
+
+    - name: Stop Filebeat before reconfiguring
+      ansible.builtin.systemd:
+        name: filebeat
+        state: stopped
+      failed_when: false
+
+    - name: Deploy Filebeat configuration
+      ansible.builtin.copy:
+        dest: /etc/filebeat/filebeat.yml
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ filebeat_config }}"
+
+    # Filebeat buffers and retries on output failure, so a late-starting ES is
+    # not fatal — but wait for it here to get a clean first run. On a fresh
+    # apply the ELK VM may still be provisioning (this play can race the
+    # module.elk action trigger), hence the long timeout.
+    - name: Wait for Elasticsearch
+      ansible.builtin.wait_for:
+        host: "{{ elk_ip }}"
+        port: 9200
+        timeout: 900
+
+    - name: Start and enable Filebeat
+      ansible.builtin.systemd:
+        name: filebeat
+        state: started
+        enabled: true
+
+    - name: Verify Filebeat is healthy
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5066"
+        status_code: [200, 405]
+        timeout: 10
+      register: filebeat_monitoring
+      until: filebeat_monitoring.status in [200, 405]
+      retries: 6
+      delay: 5
+      changed_when: false
