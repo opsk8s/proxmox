@@ -32,25 +32,11 @@
           index.number_of_shards: 1
           index.number_of_replicas: 0
           index.lifecycle.name: llm-logs-14d
-          # every doc (llama + nginx) goes through the parser; the grok
-          # processors are guarded and no-op on non-matching lines
+          # every doc goes through the parser; the grok processors are
+          # guarded and no-op on non-matching lines
           index.default_pipeline: llama-logs
         mappings:
-          properties:
-            # Explicit types for the nginx JSON access-log numbers: with
-            # dynamic mapping, request_time became `long` from a first
-            # sub-millisecond /health value (0.001 -> 0). Pinned to double so
-            # LLM request durations keep millisecond precision. (Only affects
-            # indices created after this change — ES can't re-type an
-            # existing field.)
-            status:
-              type: long
-            body_bytes_sent:
-              type: long
-            request_length:
-              type: long
-            request_time:
-              type: double
+          properties: {}
 
     # ----------------------------------------------------------------------------
     # Ingest pipeline for llama-server slot/timing lines.

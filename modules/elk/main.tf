@@ -1,7 +1,7 @@
 # ELK stack (Elasticsearch + Kibana) for LLM request-plane observability
 #
 # Receives Filebeat-shipped logs from the LLM VM (llama-server slot/timing
-# events + nginx LB JSON access log) into the `llm-logs-*` daily indices.
+# events) into the `llm-logs-*` daily indices.
 #
 # Sizing note: the host is fully allocated (12 cores, ~70GB RAM in use).
 # 2 cores / 6GB is the floor for ES (3GB auto heap) + Kibana. Free RAM on

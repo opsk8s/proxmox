@@ -1,36 +1,20 @@
 ---
 # Request-plane observability for the LLM VM (standalone, non-disruptive):
-#   1. nginx load-balancer access log in JSON (client <-> llama-server)
-#   2. Filebeat shipper for llama-server slot/timing logs + nginx JSON log
-#      into Elasticsearch on the ELK VM (192.168.51.207), indices llm-logs-*.
+#   Filebeat shipper for llama-server slot/timing logs (one server per
+#   port 8001-8004) into Elasticsearch on the ELK VM (192.168.51.207),
+#   indices llm-logs-*.
 #
-# The full llm playbook (ansible.yml) keeps its own copies of the nginx
-# log-format + access_log line so a future full redeploy stays consistent —
-# this play exists so observability can be rolled out WITHOUT the disruptive
-# full llm playbook run (dist-upgrade + possible driver reboot).
+# This play is standalone so observability can be (re)rolled out WITHOUT the
+# disruptive full llm playbook run (dist-upgrade + possible driver reboot).
 #
 # Run: make deploy-llm-observability   (ELK VM must be up first)
-- name: LLM request-plane observability (nginx JSON log + Filebeat)
+- name: LLM llama-server log shipping (Filebeat -> Elasticsearch)
   hosts: llm
   become: true
   gather_facts: false
   vars:
     ansible_python_interpreter: /usr/bin/python3
     # es_host: the Makefile passes it via --extra-vars (proxmox.tfvars)
-
-    nginx_log_format: |
-      log_format llm_json escape=json
-        '{"timestamp":"$time_iso8601",'
-        '"remote_addr":"$remote_addr",'
-        '"x_forwarded_for":"$http_x_forwarded_for",'
-        '"method":"$request_method",'
-        '"uri":"$request_uri",'
-        '"status":$status,'
-        '"body_bytes_sent":$body_bytes_sent,'
-        '"request_length":$request_length,'
-        '"request_time":$request_time,'
-        '"upstream_addr":"$upstream_addr",'
-        '"http_user_agent":"$http_user_agent"}';
 
     filebeat_config: |
       filebeat.inputs:
@@ -45,23 +29,6 @@
             - /home/llm/logs/llama_server_port_*.log
           fields:
             source: llama
-          fields_under_root: true
-
-        # nginx load-balancer access log (JSON lines; client <-> llama-server
-        # interactions: which upstream handled the request, status, size, time)
-        - type: filestream
-          id: llm-proxy-access
-          paths:
-            - /var/log/nginx/llm.access.log
-          # Filebeat 9 filestream: JSON parsing is a parser, not a top-level
-          # "json" key. target:"" lifts the JSON keys to the document root.
-          parsers:
-            - ndjson:
-                target: ""
-                overwrite_keys: true
-                add_error_key: true
-          fields:
-            source: llm-proxy
           fields_under_root: true
 
       output.elasticsearch:
@@ -87,45 +54,6 @@
         timeout: 120
         delay: 5
         sleep: 5
-
-    - name: Check nginx site exists (deployed by the main llm playbook)
-      ansible.builtin.stat:
-        path: /etc/nginx/sites-available/llm
-      register: llm_site
-
-    - name: Fail with guidance when the main playbook has not run yet
-      ansible.builtin.fail:
-        msg: "/etc/nginx/sites-available/llm not found — run 'make deploy-llm' first"
-      when: not llm_site.stat.exists
-
-    # --- nginx JSON access log -------------------------------------------------
-    - name: Deploy nginx JSON log format (http level)
-      ansible.builtin.copy:
-        dest: /etc/nginx/conf.d/llm-access-json.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: "{{ nginx_log_format }}"
-
-    # Idempotent "ensure present": the full llm playbook (ansible.yml) also
-    # writes this line in its site template — lineinfile's regexp makes this
-    # a no-op when the line already exists, so neither path duplicates it.
-    - name: Enable JSON access log in the LLM site
-      ansible.builtin.lineinfile:
-        path: /etc/nginx/sites-available/llm
-        insertafter: "server_name _;"
-        line: "              access_log /var/log/nginx/llm.access.log llm_json;"
-        regexp: "^\\s*access_log /var/log/nginx/llm\\.access\\.log llm_json;$"
-
-    - name: Test nginx configuration
-      ansible.builtin.command:
-        cmd: nginx -t
-      changed_when: false
-
-    - name: Reload nginx
-      ansible.builtin.systemd:
-        name: nginx
-        state: reloaded
 
     # --- Filebeat ----------------------------------------------------------------
     - name: Create apt keyrings directory

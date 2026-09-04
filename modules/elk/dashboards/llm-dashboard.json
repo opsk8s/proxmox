@@ -1,14 +1,13 @@
 {
   "id": "llm-observability",
   "title": "LLM Observability",
-  "description": "llama.cpp request plane: slot/timing events + nginx LB access log. Data view: LLM Logs (llm-logs-*)",
+  "description": "llama.cpp request plane: slot/timing events. Data view: LLM Logs (llm-logs-*)",
   "data_view_id": "llm-logs-data-view",
   "data_view_title": "LLM Logs",
   "data_view_pattern": "llm-logs-*",
   "panels": [
     { "title": "Generation throughput (tokens/s)", "x": 0, "y": 0, "w": 24, "h": 10 },
     { "title": "Completed generations", "x": 0, "y": 10, "w": 12, "h": 10 },
-    { "title": "Prompt processing (tokens/s)", "x": 12, "y": 10, "w": 12, "h": 10 },
-    { "title": "Proxy errors (5xx) nginx -> llama-servers", "x": 0, "y": 20, "w": 24, "h": 10 }
+    { "title": "Prompt processing (tokens/s)", "x": 12, "y": 10, "w": 12, "h": 10 }
   ]
 }

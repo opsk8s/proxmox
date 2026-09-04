@@ -56,24 +56,5 @@
         ]
       }
     ]
-  },
-  {
-    "type": "xy",
-    "title": "Proxy errors (5xx) nginx -> llama-servers",
-    "description": "5xx responses from the load balancer fronting llama-server",
-    "filters": [
-      { "type": "condition", "condition": { "field": "source.keyword", "operator": "is", "value": "llm-proxy" } },
-      { "type": "condition", "condition": { "field": "status", "operator": "range", "value": { "gte": 500 } } }
-    ],
-    "layers": [
-      {
-        "type": "area",
-        "data_source": { "type": "data_view_spec", "index_pattern": "llm-logs-*", "time_field": "@timestamp" },
-        "x": { "operation": "date_histogram", "field": "@timestamp" },
-        "y": [
-          { "operation": "count", "label": "5xx" }
-        ]
-      }
-    ]
   }
 ]

@@ -11,9 +11,10 @@
     uv_bin: /home/openwebui/.local/bin/uv
     webui_port: 8080
     # webui_ip / llm_ip: terraform passes them via extra_vars (proxmox.tfvars)
-    # OpenAI-compatible endpoint: nginx load balancer on the LLM VM in front
-    # of the 4 llama.cpp servers (ports 8001-8004, see ansible.yml)
-    llm_api_base_url: "http://{{ llm_ip }}:8000/v1"
+    # OpenAI-compatible endpoint: llama-server on GPU0 of the LLM VM. The 4
+    # llama.cpp servers run directly on 8001-8004 (one per GPU, same model,
+    # see modules/llm/ansible.yml); load balancing is left to the caller.
+    llm_api_base_url: "http://{{ llm_ip }}:8001/v1"
 
   tasks:
     - name: Wait for SSH (first boot)
@@ -96,7 +97,7 @@
           Environment=PATH=/home/openwebui/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
           # keep data out of the venv so upgrades/reinstalls never wipe it
           Environment=DATA_DIR={{ webui_app_dir }}/data
-          # OpenAI-compatible endpoint (llama.cpp servers on the LLM VM via nginx LB)
+          # OpenAI-compatible endpoint (llama-server on the LLM VM, port 8001)
           Environment=OPENAI_API_BASE_URL={{ llm_api_base_url }}
           Environment=OPENAI_API_KEY=local
           Environment=SCARF_NO_ANALYTICS=true
