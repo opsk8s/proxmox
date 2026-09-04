@@ -2,32 +2,20 @@
 - name: Deploy dnsmasq private DNS (VM)
   hosts: dns
   become: true
-  # must stay false: with gather_facts: true the play dies at "Gathering
-  # Facts" before wait_for_connection below gets a chance to wait for SSH
   gather_facts: false
+
   vars:
     ansible_python_interpreter: /usr/bin/python3
 
-    # Encrypted upstream design: dnsmasq (port 53, *.lan records) forwards
-    # everything non-local to a local unbound (127.0.0.1:5353), which does
-    # DNS-over-TLS (RFC 7858, port 853) to the public providers. dnsmasq
-    # itself has no DoT support, hence the relay.
+    # DNS-over-TLS upstreams used by Unbound.
     #
-    # dns.quad9.net is the pre-flight probe target: Quad9 is the encrypted
-    # upstream reachable from this network. Cloudflare (1.1.1.1@853) is
-    # currently blocked at router/ISP level, so it is NOT probed — it stays
-    # in the unbound config as best-effort redundancy (unbound tolerates
-    # dead forwarders).
-    tls_upstreams:
-      - "dns.quad9.net"
-
-    # unbound DoT forwarders. The @853 port implies DNS-over-TLS.
+    # 1.1.1.1 / 1.0.0.1 are the network endpoints.
+    # cloudflare-dns.com is the TLS authentication/SNI hostname.
     dot_forwarders:
-      - "9.9.9.9@853"
-      - "149.112.112.112@853"
-      - "1.1.1.1@853"
+      - "1.1.1.1@853#cloudflare-dns.com"
+      - "1.0.0.1@853#cloudflare-dns.com"
 
-    # static records for every service in this repo.
+    # Static records for every service in this repo.
     # All IPs arrive via extra_vars from Terraform (proxmox.tfvars).
     lan_records:
       - "address=/pve.lan/{{ pve_ip }}"
@@ -70,10 +58,8 @@
           - dnsutils
         state: present
 
-    # dnsmasq binds the wildcard :53, which fails while resolved's stub
-    # listener holds 127.0.0.53:53. Disabling the stub keeps resolved as
-    # the VM's own resolver (upstream = the router, so no self-reference)
-    # and frees port 53 for dnsmasq.
+    # dnsmasq owns port 53.
+    # Disable systemd-resolved's stub listener on 127.0.0.53:53.
     - name: Ensure systemd-resolved drop-in directory exists
       ansible.builtin.file:
         path: /etc/systemd/resolved.conf.d
@@ -82,7 +68,7 @@
         group: root
         mode: "0755"
 
-    - name: Disable systemd-resolved stub listener (frees port 53 for dnsmasq)
+    - name: Disable systemd-resolved stub listener
       ansible.builtin.copy:
         dest: /etc/systemd/resolved.conf.d/no-stub.conf
         owner: root
@@ -99,94 +85,10 @@
         state: restarted
       when: resolved_stub.changed
 
-    # Pre-flight checks: never switch the LAN to a broken upstream. The
-    # running dnsmasq keeps serving with its old config until every check
-    # below has passed.
-    - name: Probe DNS-over-TLS reachability to each mandatory upstream
-      ansible.builtin.command:
-        cmd: dig +tls +time=5 +tries=3 @{{ item }} {{ item }} A
-      loop: "{{ tls_upstreams }}"
-      loop_control:
-        label: "{{ item }}"
-      register: dot_probes
-      changed_when: false
+    # ------------------------------------------------------------------
+    # Unbound
+    # ------------------------------------------------------------------
 
-    - name: Fail early when a DNS-over-TLS probe failed
-      ansible.builtin.fail:
-        msg: "DoT probe failed for {{ item.item }} (rc={{ item.rc }}): {{ item.stderr | default('') }}"
-      loop: "{{ dot_probes.results }}"
-      loop_control:
-        label: "{{ item.item }}"
-      when: item.rc != 0
-
-    - name: Ensure dnsmasq config directory exists
-      ansible.builtin.file:
-        path: /etc/dnsmasq.d
-        state: directory
-        owner: root
-        group: root
-        mode: "0755"
-
-    - name: Deploy upstream + domain policy
-      ansible.builtin.copy:
-        dest: /etc/dnsmasq.d/upstream.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          # Upstream is defined explicitly below; do not read /etc/resolv.conf.
-          no-resolv
-          # Encrypted upstream chain: forward everything non-local to the
-          # local unbound, which performs DNS-over-TLS to the providers.
-          server=127.0.0.1#5353
-          # .lan is local: never send it upstream.
-          local=/lan/
-          # Keep the router's own domain resolving back to the router.
-          server=/w8s.local/{{ lan_gateway }}
-          # No single-label lookups or RFC1918 answers from upstream.
-          domain-needed
-          bogus-priv
-      notify: restart dnsmasq
-
-    - name: Deploy static .lan records
-      ansible.builtin.copy:
-        dest: /etc/dnsmasq.d/lan-records.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          {% for record in lan_records %}
-          {{ record }}
-          {% endfor %}
-      notify: restart dnsmasq
-
-    - name: Deploy unbound config (DoT relay on loopback:5353)
-      ansible.builtin.copy:
-        dest: /etc/unbound/unbound.conf
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          # Managed by Ansible. Full file on purpose: the distro default
-          # binds port 53 (dnsmasq owns it) and `interface` is additive,
-          # so it cannot be overridden via unbound.conf.d includes.
-          server:
-              username: unbound
-              directory: /etc/unbound
-              auto-trust-anchor-file: /var/lib/unbound/root.autotrust
-              interface: 127.0.0.1
-              port: 5353
-              access-control: 127.0.0.1/32 allow
-          forward-zone:
-              name: "."
-              forward-tls-upstream: yes
-              {% for forwarder in dot_forwarders %}
-              forward-addr: {{ forwarder }}
-              {% endfor %}
-      register: unbound_config
-
-    # checkconf requires the file to exist, but unbound only creates it on
-    # its first start — bootstrap it so the config check can run.
     - name: Ensure unbound state directory exists
       ansible.builtin.file:
         path: /var/lib/unbound
@@ -200,9 +102,7 @@
         path: /var/lib/unbound/root.autotrust
       register: autotrust
 
-    # Only while the file is missing or empty: afterwards unbound maintains
-    # it itself and we must not overwrite its updates.
-    - name: Seed root trust anchor from the distro root.ds file
+    - name: Seed root trust anchor from distro root.ds
       ansible.builtin.copy:
         src: /usr/share/dns/root.ds
         dest: /var/lib/unbound/root.autotrust
@@ -210,34 +110,130 @@
         owner: unbound
         group: unbound
         mode: "0644"
-      when: (not autotrust.stat.exists) or (autotrust.stat.size | default(0) == 0)
+      when:
+        - not autotrust.stat.exists or
+          autotrust.stat.size | default(0) == 0
 
-    - name: Check unbound config syntax before switching
+    - name: Deploy unbound config
+      ansible.builtin.copy:
+        dest: /etc/unbound/unbound.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible.
+          #
+          # dnsmasq owns :53.
+          # Unbound listens only on 127.0.0.1:5353.
+          # Unbound forwards all non-local DNS over TLS to Cloudflare.
+
+          server:
+              username: unbound
+              directory: /etc/unbound
+
+              auto-trust-anchor-file: /var/lib/unbound/root.autotrust
+
+              # Required for forwarder certificate verification (auth-name
+              # in forward-addr): without it unbound has no trust anchors
+              # and every DoT handshake fails with "self-signed certificate
+              # in certificate chain".
+              tls-cert-bundle: /etc/ssl/certs/ca-certificates.crt
+
+              interface: 127.0.0.1
+              port: 5353
+
+              access-control: 127.0.0.1/32 allow
+
+          forward-zone:
+              name: "."
+              forward-tls-upstream: yes
+
+          {% for forwarder in dot_forwarders %}
+              forward-addr: {{ forwarder }}
+          {% endfor %}
+      register: unbound_config
+
+    - name: Check unbound config syntax
       ansible.builtin.command:
         cmd: unbound-checkconf
       changed_when: false
 
-    - name: Check dnsmasq config syntax before switching
-      ansible.builtin.command:
-        cmd: dnsmasq --test
-      changed_when: false
-
-    # Must run before dnsmasq starts: the apt postinst already started
-    # unbound with the distro default (port 53), and this restart is what
-    # frees port 53 for dnsmasq. A handler cannot do this job — it would
-    # only fire if the play survives dnsmasq's start.
-    - name: Apply unbound configuration
+    # Apply Unbound before dnsmasq starts/restarts.
+    - name: Restart unbound with final configuration
       ansible.builtin.systemd:
         name: unbound
         state: restarted
       when: unbound_config.changed
 
-    # unbound first: dnsmasq's first upstream query needs a live relay.
     - name: Enable and start unbound
       ansible.builtin.systemd:
         name: unbound
         state: started
         enabled: true
+
+    # ------------------------------------------------------------------
+    # dnsmasq
+    # ------------------------------------------------------------------
+
+    - name: Ensure dnsmasq config directory exists
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy dnsmasq upstream + domain policy
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.d/upstream.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible.
+          #
+          # Do not read /etc/resolv.conf.
+          no-resolv
+
+          # Forward all non-local DNS to local Unbound.
+          # Unbound performs DNS-over-TLS to Cloudflare.
+          server=127.0.0.1#5353
+
+          # .lan is local and must never be sent upstream.
+          local=/lan/
+
+          # Keep the router's own domain resolving through the router.
+          server=/w8s.local/{{ lan_gateway }}
+
+          # Do not forward single-label names.
+          domain-needed
+
+          # Do not accept bogus RFC1918 answers from upstream.
+          bogus-priv
+      register: dnsmasq_upstream
+
+    - name: Deploy static .lan records
+      ansible.builtin.copy:
+        dest: /etc/dnsmasq.d/lan-records.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {% for record in lan_records %}
+          {{ record }}
+          {% endfor %}
+      register: dnsmasq_records
+
+    - name: Check dnsmasq config syntax
+      ansible.builtin.command:
+        cmd: dnsmasq --test
+      changed_when: false
+
+    - name: Restart dnsmasq with final configuration
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: restarted
+      when: dnsmasq_upstream.changed or dnsmasq_records.changed
 
     - name: Enable and start dnsmasq
       ansible.builtin.systemd:
@@ -245,18 +241,42 @@
         state: started
         enabled: true
 
-  handlers:
-    - name: restart dnsmasq
-      ansible.builtin.systemd:
-        name: dnsmasq
-        state: restarted
+    # ------------------------------------------------------------------
+    # Basic service checks
+    # ------------------------------------------------------------------
 
-# handlers of the previous play fire before this one starts, so both
-# services are running with the final config when we verify
+    - name: Check Unbound is listening on 127.0.0.1:5353
+      ansible.builtin.command:
+        cmd: ss -lnup
+      register: unbound_socket
+      changed_when: false
+
+    - name: Fail if Unbound is not listening on port 5353
+      ansible.builtin.fail:
+        msg: "Unbound is not listening on 127.0.0.1:5353"
+      when: "'127.0.0.1:5353' not in unbound_socket.stdout"
+
+    - name: Check dnsmasq is listening on port 53
+      ansible.builtin.command:
+        cmd: ss -lnup
+      register: dnsmasq_socket
+      changed_when: false
+
+    - name: Fail if dnsmasq is not listening on port 53
+      ansible.builtin.fail:
+        msg: "dnsmasq is not listening on DNS port 53"
+      when: "':53' not in dnsmasq_socket.stdout"
+
+
+# ----------------------------------------------------------------------
+# Verification
+# ----------------------------------------------------------------------
+
 - name: Verify DNS resolution
   hosts: dns
   become: true
   gather_facts: false
+
   vars:
     ansible_python_interpreter: /usr/bin/python3
 
@@ -267,14 +287,22 @@
       register: lan_check
       changed_when: false
 
-    - name: Fail early when the static record does not resolve
+    - name: Fail when static record does not resolve correctly
       ansible.builtin.fail:
-        msg: "expected {{ postgres_ip }} for postgres.lan, got: {{ lan_check.stdout_lines | join(',') }}"
-      when: "'{{ postgres_ip }}' not in lan_check.stdout_lines"
+        msg: >-
+          expected {{ postgres_ip }} for postgres.lan,
+          got: {{ lan_check.stdout_lines | join(',') }}
+      when: postgres_ip not in lan_check.stdout_lines
 
-    # example.com has no local record, so the answer can only come from the
-    # encrypted chain: dnsmasq -> unbound -> DoT -> public providers.
-    # Retries cover unbound's cold start (initial root trust-anchor fetch).
+    # This query exercises:
+    #
+    # dnsmasq :53
+    #     ↓
+    # Unbound :5353
+    #     ↓
+    # Cloudflare DNS-over-TLS :853
+    #
+    # It therefore validates the actual production path.
     - name: Check encrypted upstream forwarding
       ansible.builtin.command:
         cmd: dig +short example.com @127.0.0.1
@@ -282,4 +310,11 @@
       changed_when: false
       retries: 6
       delay: 5
-      until: upstream_check.stdout_lines | default([]) | length > 0
+      until:
+        - upstream_check.rc == 0
+        - upstream_check.stdout_lines | default([]) | length > 0
+
+    - name: Show encrypted upstream result
+      ansible.builtin.debug:
+        msg:
+          - "postgres.lan -> {{ lan_check.stdout_lines }}"
