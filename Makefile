@@ -69,7 +69,7 @@ deploy-monitoring:
 # via the Terraform action trigger when the VM is created or updated.
 deploy-elk:
 	$(ANSIBLE_PLAYBOOK) -i modules/elk/inventory.ini modules/elk/ansible.yml \
-		--extra-vars "ansible_host=$(call tfvar,elk_ip)"
+		--extra-vars "ansible_host=$(call tfvar,elk_ip) es_ip=$(call tfvar,elk_ip)"
 
 # DNS VM (dnsmasq, *.lan records + DoT upstreams). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.

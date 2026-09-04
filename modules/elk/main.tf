@@ -103,6 +103,7 @@ action "ansible_playbook_run" "configure_elk" {
     private_key_file = var.ssh_private_key_file
     extra_vars = {
       ansible_host = var.lan_ip
+      es_ip        = var.lan_ip
     }
   }
 }
