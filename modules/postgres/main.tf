@@ -43,11 +43,11 @@ resource "proxmox_virtual_environment_vm" "postgres_vm" {
   // 4 physical
   cpu {
     sockets = 1
-    cores   = 8
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 16384
+    dedicated = var.memory_mb
   }
 
   disk {

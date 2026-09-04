@@ -48,11 +48,11 @@ resource "proxmox_virtual_environment_vm" "jenkins_vm" {
   // 1 physical
   cpu {
     sockets = 1
-    cores   = 2
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 8192
+    dedicated = var.memory_mb
   }
 
   disk {

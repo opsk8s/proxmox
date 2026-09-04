@@ -41,11 +41,11 @@ resource "proxmox_virtual_environment_vm" "jenkins_agent_vm" {
   // 2 physical
   cpu {
     sockets = 1
-    cores   = 4
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 8192
+    dedicated = var.memory_mb
   }
 
   disk {

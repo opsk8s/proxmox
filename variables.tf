@@ -132,3 +132,84 @@ variable "keyboard_layout" {
   description = "Keyboard layout for the VM consoles (e.g. de-ch)"
 }
 
+# --- VM sizing (CPU cores / dedicated memory in MB) ----------------------------
+variable "llm_cpu_cores" {
+  type    = number
+  default = 4
+}
+
+variable "llm_memory_mb" {
+  type    = number
+  default = 32768
+}
+
+variable "jenkins_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "jenkins_memory_mb" {
+  type    = number
+  default = 8192
+}
+
+variable "jenkins_agent_cpu_cores" {
+  type    = number
+  default = 4
+}
+
+variable "jenkins_agent_memory_mb" {
+  type    = number
+  default = 8192
+}
+
+variable "open_webui_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "open_webui_memory_mb" {
+  type    = number
+  default = 4096
+}
+
+variable "postgres_cpu_cores" {
+  type    = number
+  default = 8
+}
+
+variable "postgres_memory_mb" {
+  type    = number
+  default = 16384
+}
+
+variable "monitoring_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "monitoring_memory_mb" {
+  type    = number
+  default = 2048
+}
+
+variable "elk_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "elk_memory_mb" {
+  type    = number
+  default = 6144
+}
+
+variable "dns_cpu_cores" {
+  type    = number
+  default = 1
+}
+
+variable "dns_memory_mb" {
+  type    = number
+  default = 1024
+}
+

@@ -53,3 +53,11 @@ variable "dns_ip" {
 variable "keyboard_layout" {
   type = string
 }
+
+variable "cpu_cores" {
+  type = number
+}
+
+variable "memory_mb" {
+  type = number
+}

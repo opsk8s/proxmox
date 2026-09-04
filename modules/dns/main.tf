@@ -59,11 +59,11 @@ resource "proxmox_virtual_environment_vm" "dns_vm" {
   // 1 physical
   cpu {
     sockets = 1
-    cores   = 1
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 1024
+    dedicated = var.memory_mb
   }
 
   disk {

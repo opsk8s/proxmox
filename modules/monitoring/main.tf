@@ -51,11 +51,11 @@ resource "proxmox_virtual_environment_vm" "monitoring_vm" {
   // 2 physical
   cpu {
     sockets = 1
-    cores   = 2
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 2048
+    dedicated = var.memory_mb
   }
 
   disk {

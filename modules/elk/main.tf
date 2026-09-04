@@ -58,11 +58,11 @@ resource "proxmox_virtual_environment_vm" "elk_vm" {
   // 2 physical (lab is core-saturated; ES+Kibana are idle-most-of-the-time)
   cpu {
     sockets = 1
-    cores   = 2
+    cores   = var.cpu_cores
   }
 
   memory {
-    dedicated = 6144
+    dedicated = var.memory_mb
   }
 
   disk {

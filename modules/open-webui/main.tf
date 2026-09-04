@@ -43,14 +43,14 @@ resource "proxmox_virtual_environment_vm" "openwebui_vm" {
   // one physical
   cpu {
     sockets = 1
-    cores   = 2
+    cores   = var.cpu_cores
     # the default qemu64 CPU exposes a baseline-only feature set (no SSE4.2/POPCNT)
     # and numpy 2.x wheels refuse to load on it; pass the host's features through
     type = "host"
   }
 
   memory {
-    dedicated = 4096
+    dedicated = var.memory_mb
   }
 
   disk {

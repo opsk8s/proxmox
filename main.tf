@@ -34,6 +34,8 @@ module "llm" {
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   hf_token             = var.hf_token
   ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.llm_cpu_cores
+  memory_mb            = var.llm_memory_mb
   lan_ip               = var.llm_ip
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
@@ -52,6 +54,8 @@ module "jenkins" {
   ssh_public_key         = trimspace(data.local_file.public_key.content)
   jenkins_admin_password = var.jenkins_admin_password
   ssh_private_key_file   = var.ssh_private_key_file
+  cpu_cores              = var.jenkins_cpu_cores
+  memory_mb              = var.jenkins_memory_mb
   lan_ip                 = var.jenkins_ip
   lan_network            = var.lan_network
   lan_gateway            = var.lan_gateway
@@ -70,6 +74,8 @@ module "jenkins_agent" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.jenkins_public_key.content)
   ssh_private_key_file = var.jenkins_agent_ssh_private_key_file
+  cpu_cores            = var.jenkins_agent_cpu_cores
+  memory_mb            = var.jenkins_agent_memory_mb
   lan_ip               = var.jenkins_agent_ip
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
@@ -87,6 +93,8 @@ module "open_webui" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.open_webui_cpu_cores
+  memory_mb            = var.open_webui_memory_mb
   lan_ip               = var.open_webui_ip
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
@@ -108,6 +116,8 @@ module "postgres" {
   smartshift_admin_password = var.smartshift_admin_password
   analytics_ro_password     = var.analytics_ro_password
   ssh_private_key_file      = var.ssh_private_key_file
+  cpu_cores                 = var.postgres_cpu_cores
+  memory_mb                 = var.postgres_memory_mb
   lan_ip                    = var.postgres_ip
   lan_network               = var.lan_network
   lan_gateway               = var.lan_gateway
@@ -126,6 +136,8 @@ module "monitoring" {
   ssh_public_key         = trimspace(data.local_file.public_key.content)
   grafana_admin_password = var.grafana_admin_password
   ssh_private_key_file   = var.ssh_private_key_file
+  cpu_cores              = var.monitoring_cpu_cores
+  memory_mb              = var.monitoring_memory_mb
   lan_ip                 = var.monitoring_ip
   lan_network            = var.lan_network
   lan_gateway            = var.lan_gateway
@@ -149,6 +161,8 @@ module "elk" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.elk_cpu_cores
+  memory_mb            = var.elk_memory_mb
   lan_ip               = var.elk_ip
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
@@ -166,6 +180,8 @@ module "dns" {
   ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
   ssh_public_key       = trimspace(data.local_file.public_key.content)
   ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.dns_cpu_cores
+  memory_mb            = var.dns_memory_mb
   lan_ip               = var.dns_ip
   lan_network          = var.lan_network
   lan_gateway          = var.lan_gateway
