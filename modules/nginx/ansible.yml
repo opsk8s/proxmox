@@ -206,40 +206,47 @@
     filebeat_config: |
       filebeat.inputs:
         # nginx JSON access log (log_format json_analytics). One JSON object
-        # per line — the json codec decodes it into top-level fields.
+        # per line — decoded into top-level fields by the
+        # decode_json_fields processor below.
         - type: filestream
           id: nginx-access-logs
           paths:
             - /var/log/nginx/access.log
-          format: json
-          json:
-            keys_under_root: true
           fields:
             source: nginx
           fields_under_root: true
 
       processors:
+        # Filebeat 9.x has no filestream json codec — the line has to be
+        # decoded explicitly. target "" merges the keys at the event root
+        # (the old json.keys_under_root); overwrite_keys lets the log's
+        # "host" (the vhost) win over the ECS host object, which the
+        # dashboards group by.
+        - decode_json_fields:
+            fields: ["message"]
+            target: ""
+            overwrite_keys: true
+            add_error_key: true
         # time_local: "04/Sep/2026:12:34:56 +0200" (nginx default time format)
         - timestamp:
-            fields: ["time_local"]
+            field: "time_local"
             layouts:
               - "02/Jan/2006:15:04:05 -0700"
             target_field: "@timestamp"
-        # nginx emits every value as a string; the dashboards need numbers
-        # (upstream_response_time is "-" for non-proxied requests — the
-        # failure is expected and ignored).
+        # nginx emits every value as a string; the dashboards need numbers.
+        # 9.x convert: `type` is the target type and `to` is the destination
+        # field — omitting `to` converts in place. fail_on_error: false keeps
+        # the non-proxied case (upstream_response_time is "" for the default
+        # vhost) from failing the event.
         - convert:
             fields:
-              - name: request_time
-                type: string
-                to: double
-              - name: upstream_response_time
-                type: string
-                to: double
-              - name: body_bytes_sent
-                type: string
-                to: long
-            ignore_failure: true
+              - from: request_time
+                type: double
+              - from: upstream_response_time
+                type: double
+              - from: body_bytes_sent
+                type: long
+            fail_on_error: false
 
       output.elasticsearch:
         hosts: ["http://{{ elk_ip }}:9200"]
@@ -337,6 +344,17 @@
         - app-open-webui.conf
         - app-llm.conf
 
+    # The distro nginx.conf also declares `access_log /var/log/nginx/access.log;`
+    # in the http context — with the json_analytics directive pointing at the
+    # same path every request would be logged twice (combined lines
+    # interleaved with JSON, which Filebeat cannot decode).
+    - name: Disable the distro default access_log (JSON log owns that path)
+      ansible.builtin.lineinfile:
+        path: /etc/nginx/nginx.conf
+        regexp: '^\s*access_log /var/log/nginx/access\.log;\s*$'
+        line: '# disabled: /etc/nginx/conf.d/10-logging.conf writes the JSON access log to this path'
+      notify: restart nginx
+
     - name: Check nginx configuration syntax
       ansible.builtin.command:
         cmd: nginx -t
@@ -368,7 +386,7 @@
     - name: "Verify a vhost proxies (Host: app.kibana.lan)"
       ansible.builtin.uri:
         url: "http://127.0.0.1/api/status"
-        header:
+        headers:
           Host: app.kibana.lan
         status_code: [200]
         timeout: 30
@@ -455,3 +473,9 @@
       retries: 6
       delay: 5
       changed_when: false
+
+  handlers:
+    - name: restart nginx
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted

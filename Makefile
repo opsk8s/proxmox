@@ -87,6 +87,7 @@ deploy-dns:
 		postgres_ip=$(call tfvar,postgres_ip) \
 		monitoring_ip=$(call tfvar,monitoring_ip) \
 		elk_ip=$(call tfvar,elk_ip) \
+		nginx_ip=$(call tfvar,nginx_ip) \
 		lan_gateway=$(call tfvar,lan_gateway)"
 
 # Reverse-proxy VM (nginx, vhosts for every service, JSON access log shipped
