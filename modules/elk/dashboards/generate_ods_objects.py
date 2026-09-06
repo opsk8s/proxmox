@@ -55,13 +55,16 @@ def _search_source(data_view_id: str, filters: list) -> str:
 
 
 def data_view_object(dash: dict) -> dict:
-    # `fields`/`fieldFormats` are JSON-encoded strings in Kibana 7.x
-    # index-patterns; ODS refreshes the field list from the live index on
-    # first open of the data view.
+    # title MUST be the index pattern: ODS matches the pattern against
+    # indices via attributes.title (attributes.name is only a display
+    # label). Getting this inverted yields Discover/dashboard errors
+    # "No indices match pattern <title>". `fields`/`fieldFormats` are
+    # JSON-encoded strings in Kibana 7.x index-patterns; ODS refreshes
+    # the field list from the live index on first open of the data view.
     return {
         "attributes": {
-            "title": dash["data_view_title"],
-            "name": dash["data_view_pattern"],
+            "title": dash["data_view_pattern"],
+            "name": dash["data_view_title"],
             "timeFieldName": "@timestamp",
             "fields": "[]",
             "fieldFormats": "{}",
