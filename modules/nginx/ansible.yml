@@ -264,6 +264,15 @@
           Path         /var/log/nginx/bodies.log
           DB           /var/lib/fluent-bit/fluent-bit-body.db
           Parser       nginx_json
+          # A capture line embeds the FULL request + response body as one
+          # JSON record (single line). The default 32K tail buffer cannot
+          # hold them: Fluent Bit then logs "requires a larger buffer size,
+          # lines are too long. Skipping file." and never advances past the
+          # offending line (offset DB freezes). The lua script caps a single
+          # response at 64M (body-capture.lua MAX_ACCUM) and escaping can
+          # inflate that by ~2x, hence the 128M ceiling.
+          Buffer_Chunk_Size  4M
+          Buffer_Max_Size    128M
 
       [FILTER]
           Name    modify
