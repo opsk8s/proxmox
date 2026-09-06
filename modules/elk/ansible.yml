@@ -5,7 +5,7 @@
 # stack in place: the play first purges the Elastic packages (guarded — no-op
 # on a fresh VM), then installs and configures the OpenSearch 2.x bundle.
 #
-# The data is a 14-day rolling window of transient logs (ILM delete), so a
+# The data is a 14-day rolling window of transient logs (ISM delete), so a
 # short gap during the migration is accepted by design — ES 9 snapshots are
 # not readable by OpenSearch and remote reindex from ES 9 is not supported.
 #
@@ -40,18 +40,28 @@
 
     # Indices: Filebeat on the LLM VM ships into llm-logs-YYYY.MM.dd
     # (see modules/llm/observability.yml). 14-day retention, then delete.
-    # Phase actions are an OBJECT map keyed by action name (the array form
-    # is rejected). Identical shape to the ES 9 policies this replaces.
-    ilm_policy:
+    # OpenSearch 2.x has NO ES-style ILM API (the /_ilm handlers do not
+    # exist in the 2.19 index-management plugin) — retention is done with
+    # ISM policies under /_plugins/_ism. The index template attaches the
+    # policy via index.plugins.index_state_management.policy_id; ISM's
+    # coordinator sweep manages new matching indices within ~5-10m.
+    # Semantics match the ES 9 stack this replaces: hot immediately,
+    # delete once the index is 14 days old.
+    llm_ism_policy:
       policy:
-        phases:
-          hot:
-            min_age: 0ms
-            actions: {}
-          delete:
-            min_age: 14d
+        description: llm-logs 14-day retention (was ES 9 ILM policy)
+        default_state: hot
+        states:
+          - name: hot
+            actions: []
+            transitions:
+              - state_name: delete
+                conditions:
+                  min_index_age: 14d
+          - name: delete
             actions:
-              delete: {}
+              - delete: {}
+            transitions: []
 
     index_template:
       index_patterns:
@@ -61,7 +71,7 @@
         settings:
           index.number_of_shards: 1
           index.number_of_replicas: 0
-          index.lifecycle.name: llm-logs-14d
+          index.plugins.index_state_management.policy_id: llm-logs-14d
           # every doc goes through the parser; the grok processors are
           # guarded and no-op on non-matching lines
           index.default_pipeline: llama-logs
@@ -70,16 +80,21 @@
 
     # Indices: Filebeat on the nginx VM ships the JSON access log into
     # nginx-access-YYYY.MM.dd (see modules/nginx/ansible.yml).
-    nginx_ilm_policy:
+    nginx_ism_policy:
       policy:
-        phases:
-          hot:
-            min_age: 0ms
-            actions: {}
-          delete:
-            min_age: 14d
+        description: nginx-access 14-day retention (was ES 9 ILM policy)
+        default_state: hot
+        states:
+          - name: hot
+            actions: []
+            transitions:
+              - state_name: delete
+                conditions:
+                  min_index_age: 14d
+          - name: delete
             actions:
-              delete: {}
+              - delete: {}
+            transitions: []
 
     nginx_index_template:
       index_patterns:
@@ -89,7 +104,7 @@
         settings:
           index.number_of_shards: 1
           index.number_of_replicas: 0
-          index.lifecycle.name: nginx-access-14d
+          index.plugins.index_state_management.policy_id: nginx-access-14d
         mappings:
           properties: {}
 
@@ -389,11 +404,27 @@
         - /usr/local/share/kibana-llm-content
 
     # --- OpenSearch APT repository (official 2.x bundle) -----------------------
-    - name: Fetch OpenSearch GPG key
+    # The 2.x apt repos are still signed with the LEGACY 2021 release key;
+    # the bucket's publickeys/ now only serves the 2025 key that signs the
+    # 3.x repos. Fetch the legacy key by keyid from the keyserver and pin
+    # it against the fingerprint published in the official docs. No
+    # creates: guard: a stale or wrong key file must self-heal on the next
+    # run — the fingerprint task below is the real gate.
+    - name: Fetch OpenSearch 2.x release GPG key (legacy key from keyserver)
       ansible.builtin.shell: |
-        curl -fsSL https://artifacts.opensearch.org/publickeys/OpensearchProjectPublicKey.asc | gpg --dearmor -o /etc/apt/keyrings/opensearch.gpg
-      args:
-        creates: /etc/apt/keyrings/opensearch.gpg
+        set -o pipefail
+        GNUPGHOME=$(mktemp -d)
+        chmod 700 "$GNUPGHOME"
+        gpg --homedir "$GNUPGHOME" --batch --keyserver hkps://keys.openpgp.org --recv-keys 39D319879310D3FC
+        gpg --homedir "$GNUPGHOME" --batch --armor --export 39D319879310D3FC | gpg --batch --yes --dearmor -o /etc/apt/keyrings/opensearch.gpg
+        rm -rf "$GNUPGHOME"
+      changed_when: false
+
+    - name: Verify OpenSearch release key fingerprint
+      ansible.builtin.shell: gpg --no-default-keyring --keyring /etc/apt/keyrings/opensearch.gpg --fingerprint
+      register: os_key_fp
+      changed_when: false
+      failed_when: "'C5B7498965EFD1C2924BA9D539D319879310D3FC' not in (os_key_fp.stdout | regex_replace('\\s+', ''))"
 
     - name: Add OpenSearch APT repository (2.x bundle)
       ansible.builtin.copy:
@@ -402,7 +433,8 @@
         group: root
         mode: "0644"
         content: |
-          deb [arch=amd64 signed-by=/etc/apt/keyrings/opensearch.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/linux-x64 /
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/opensearch.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/apt stable main
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/opensearch.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch-dashboards/2.x/apt stable main
 
     # Hard-fail on update errors: the apt module can swallow a failed
     # `apt-get update` (transient network on first boot) and then the install
@@ -422,12 +454,17 @@
           - opensearch
           - opensearch-dashboards
         state: present
+      # 2.12+ postinst runs the demo security config and FAILS without
+      # OPENSEARCH_INITIAL_ADMIN_PASSWORD. We disable the security plugin
+      # entirely, so skip the demo config — the env var reaches the
+      # postinst through the apt-get/dpkg process chain.
+      environment:
+        DISABLE_INSTALL_DEMO_CONFIG: "true"
       register: opensearch_install
 
-    # The debs' postinsts try to start both services with stock config
-    # (OpenSearch: security plugin auto-configured in demo mode,
-    # Dashboards: default opensearch.hosts). Stop them, configure, then
-    # start cleanly.
+    # On UPGRADE the opensearch postinst restarts the service with whatever
+    # stock config is present; on fresh install nothing is started. Stop
+    # both defensively, configure, then start cleanly.
     - name: Stop services started by package postinsts
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -435,6 +472,37 @@
         enabled: false
       loop: [opensearch, opensearch-dashboards]
       when: opensearch_install is changed
+
+    # OpenSearch Dashboards ships its own auth plugin (securityDashboards);
+    # with OpenSearch-side security disabled it has no backend to validate
+    # against and 401s EVERY request — the docs (disable-enable-security)
+    # say to remove the plugin. Removal MUST delete the plugin dir as root:
+    # `bin/opensearch-dashboards-plugin remove` as the service user prints
+    # "complete" but cannot write the root-owned plugins dir (silent no-op).
+    # Guarded on the dir: an apt upgrade of the opensearch-dashboards deb
+    # re-adds the plugin, and this restores the no-security state on the
+    # next deploy-elk run.
+    - name: Check whether the securityDashboards plugin is installed
+      ansible.builtin.stat:
+        path: /usr/share/opensearch-dashboards/plugins/securityDashboards
+      register: osds_sec
+
+    - name: Remove the securityDashboards plugin
+      ansible.builtin.shell: |
+        systemctl stop opensearch-dashboards
+        rm -rf /usr/share/opensearch-dashboards/plugins/securityDashboards
+        python3 - <<'EOF'
+        import json
+        p = "/usr/share/opensearch-dashboards/package.json"
+        d = json.load(open(p))
+        d.get("opensearchDashboards", {}).get("plugins", [])[:] = [
+            x for x in d.get("opensearchDashboards", {}).get("plugins", [])
+            if x != "securityDashboards"
+        ]
+        json.dump(d, open(p, "w"), indent=2)
+        EOF
+      when: osds_sec.stat.exists
+      register: osds_remove
 
     # --- OpenSearch ------------------------------------------------------------
     # The whole file is written (fresh install — no postinst collision to
@@ -501,14 +569,26 @@
       delay: 10
       changed_when: false
 
-    # --- Server-side ingest resources (bodies verbatim from the ES 9 stack) ----
-    - name: Deploy ILM policy (14d hot, then delete)
+    # --- Server-side ingest resources (policy adapted to OpenSearch ISM;
+    #     templates and pipeline bodies verbatim from the ES 9 stack) ------
+    # ISM policy PUTs are optimistic-concurrency: a plain PUT conflicts
+    # (409) once the policy exists, and ?if_seq_no/if_primary_term fail on
+    # first create — hence GET-then-PUT for idempotency.
+    - name: Get current llm-logs ISM policy version
       ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_ilm/policy/llm-logs-14d"
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-logs-14d"
+        method: GET
+        status_code: [200, 404]
+      register: llm_ism_get
+      changed_when: false
+
+    - name: Create or update ISM retention policy (llm-logs, delete after 14d)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-logs-14d{% if llm_ism_get.status == 200 %}?if_seq_no={{ llm_ism_get.json._seq_no }}&if_primary_term={{ llm_ism_get.json._primary_term }}{% endif %}"
         method: PUT
         body_format: json
-        body: "{{ ilm_policy | to_nice_json }}"
-        status_code: 200
+        body: "{{ llm_ism_policy | to_nice_json }}"
+        status_code: [200, 201]
 
     - name: Deploy index template (llm-logs-*)
       ansible.builtin.uri:
@@ -526,13 +606,21 @@
         body: "{{ llama_pipeline | to_nice_json }}"
         status_code: 200
 
-    - name: Deploy nginx ILM policy (14d hot, then delete)
+    - name: Get current nginx-access ISM policy version
       ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_ilm/policy/nginx-access-14d"
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/nginx-access-14d"
+        method: GET
+        status_code: [200, 404]
+      register: nginx_ism_get
+      changed_when: false
+
+    - name: Create or update ISM retention policy (nginx-access, delete after 14d)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/nginx-access-14d{% if nginx_ism_get.status == 200 %}?if_seq_no={{ nginx_ism_get.json._seq_no }}&if_primary_term={{ nginx_ism_get.json._primary_term }}{% endif %}"
         method: PUT
         body_format: json
-        body: "{{ nginx_ilm_policy | to_nice_json }}"
-        status_code: 200
+        body: "{{ nginx_ism_policy | to_nice_json }}"
+        status_code: [200, 201]
 
     - name: Deploy nginx index template (nginx-access-*)
       ansible.builtin.uri:
@@ -642,8 +730,10 @@
           - curl
           - --fail
           - --silent
-          - -F "file=@/usr/local/share/ods-llm-content/llm-dashboards.ndjson"
-          - -H "kbn-xsrf: true"
+          - -F
+          - "file=@/usr/local/share/ods-llm-content/llm-dashboards.ndjson"
+          - -H
+          - "osd-xsrf: true"
           - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
       register: llm_import
       changed_when: true
@@ -669,8 +759,10 @@
           - curl
           - --fail
           - --silent
-          - -F "file=@/usr/local/share/ods-llm-content/nginx-dashboards.ndjson"
-          - -H "kbn-xsrf: true"
+          - -F
+          - "file=@/usr/local/share/ods-llm-content/nginx-dashboards.ndjson"
+          - -H
+          - "osd-xsrf: true"
           - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
       register: nginx_import
       changed_when: true
@@ -701,5 +793,5 @@
     - name: Assert LLM and NGINX dashboards are present
       ansible.builtin.assert:
         that:
-          - (dashboards_found.json.data | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics"]) | list | length) == 2
+          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics"]) | list | length) == 2
         fail_msg: Dashboards missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.

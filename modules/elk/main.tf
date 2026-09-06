@@ -1,6 +1,6 @@
 # OpenSearch stack (OpenSearch + Dashboards) for LLM request-plane
 # observability. Replaced Elasticsearch 9 + Kibana 9 in place (VM 201, 2026-09):
-# same ports, same Filebeat shippers, same ILM/pipeline semantics.
+# same ports, same Filebeat shippers, same retention/pipeline semantics.
 #
 # Receives Filebeat-shipped logs from the LLM VM (llama-server slot/timing
 # events) into the `llm-logs-*` daily indices.

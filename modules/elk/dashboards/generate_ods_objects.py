@@ -4,7 +4,7 @@ definitions next to it.
 
 Inputs (committed):
     llm-dashboard.json / nginx-dashboard.json  - dashboard layout
-    llm-charts.json / nginx-charts.json        - TSVB chart definitions
+    llm-charts.json / nginx-charts.json        - line/area chart definitions
 Outputs (committed, imported by the playbook):
     llm-dashboards.ndjson / nginx-dashboards.ndjson
         one saved object per line: data view, then charts, then dashboard
@@ -13,8 +13,18 @@ Run locally after editing the definitions:
     python3 modules/elk/dashboards/generate_ods_objects.py
 
 The playbook imports each file via
-    POST /api/saved_objects/_import?overwrite=true
+    POST /api/saved_objects/_import?overwrite=true (header: osd-xsrf: true)
 which is idempotent (objects are replaced in place on every run).
+
+Object shapes are the CLASSIC Kibana 7.10 / ODS 2.x forms, verified against a
+live ODS 2.19.6 on 2026-09-06:
+  - index-pattern: attributes {title, name, timeFieldName, fields, fieldFormats}
+  - visualization: attributes.visState (JSON string, vislib line/area) +
+    kibanaSavedObjectMeta.searchSourceJSON (index + lucene query)
+  - dashboard: panelsJSON/optionsJSON strings with 7.3.0-format panels
+Type migrationVersions are pinned to the fork point so no stale migrations
+run on import (e.g. ODS has no 7.x "visualization object" schema — using one
+blows up migrateTableSplits with "Unexpected token u in JSON").
 """
 
 import json
@@ -22,101 +32,23 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 
-# ODS is a Kibana 7.10 fork: classic saved objects with this migration
-# version import and render cleanly.
-MIGRATION_VERSION = "7.8.0"
-
-# Default Kibana series palette.
-PALETTE = ["#61dafb", "#61a0eb", "#f5a700", "#d87c7c", "#956cb4"]
-
-# TSVB time-bucket x-axis: same as the Lens charts these replace.
-BUCKET_ID = "bucket-1"
-BUCKET_AGG = {
-    "id": BUCKET_ID,
-    "type": "date_histogram",
-    "settings": {
-        "field": "@timestamp",
-        "interval": "auto",
-        "min_doc_count": 0,
-        "extended_bounds": {},
-    },
-}
+# Type-specific migration versions at the Kibana 7.10 fork point.
+VIZ_MIGRATION = "7.10.0"
+DASH_MIGRATION = "7.9.3"
+CORE_MIGRATION = "7.8.0"
 
 
-def tsvb_params(chart_type: str) -> dict:
-    params = {
-        "type": chart_type,
-        "groups": [],
-        "styles": [],
-        "addTooltip": True,
-        "addLegend": True,
-        "scale": "Linear",
-        "timezone": "browser",
-        "interpolate": "linear",
-        "radius": True,
-        "yAxis": {"style": {}, "show": True, "log": False, "mask": False, "reversed": False},
-        "setPos": None,
-    }
-    if chart_type == "area":
-        params["smoothLines"] = True
-    return params
-
-
-def tsvb_aggs(metrics: list) -> list:
-    aggs = [BUCKET_AGG]
-    for i, m in enumerate(metrics, start=1):
-        aggs.append({
-            "id": f"metric-{i}",
-            "type": m["type"],
-            "settings": {"field": m["field"]} if m.get("field") else {},
-        })
-    return aggs
-
-
-def tsvb_aggs_schema(metrics: list) -> dict:
-    return {
-        "groups": [{
-            "id": BUCKET_ID,
-            "type": "date_histogram",
-            "schema": {"id": "bucket", "type": "string"},
-            "rowStyle": {},
-            "rowColor": "",
-        }],
-        "metrics": [
-            {
-                "id": f"metric-{i}",
-                "type": m["type"],
-                "schema": {"id": "metric", "type": "number"},
-                "decimals": 0 if m["type"] == "count" else 3,
-                "labels": True,
-                "label": m["label"],
-                "color": PALETTE[(i - 1) % len(PALETTE)],
-            }
-            for i, m in enumerate(metrics, start=1)
-        ],
-    }
-
-
-def search_source(data_view_id: str, filters: list) -> str:
-    # query_string is the most portable saved-object query shape across
-    # Kibana 7.x / ODS — field:value terms on .keyword fields match exactly.
+def _search_source(data_view_id: str, filters: list) -> str:
+    # lucene query on .keyword fields: the classic searchSource query shape.
     if filters:
         query = " AND ".join(f"{f['field']}:{f['value']}" for f in filters)
-        q = {"query_string": {"query": query, "analyze_wildcard": True, "default_operator": "and"}}
     else:
-        q = {"query_string": {"query": "*", "analyze_wildcard": True}}
+        query = "*"
     return json.dumps(
         {
             "index": data_view_id,
+            "query": {"query": query, "language": "lucene"},
             "filter": [],
-            "highlight": {
-                "pre_tags": ["@kibana-highlighted-field@"],
-                "post_tags": ["@/kibana-highlighted-field@"],
-                "fields": ["*"],
-                "require_field_match": False,
-                "test_field": "message",
-            },
-            "query": q,
         },
         separators=(",", ":"),
     )
@@ -134,10 +66,94 @@ def data_view_object(dash: dict) -> dict:
             "fields": "[]",
             "fieldFormats": "{}",
         },
-        "coreMigrationVersion": MIGRATION_VERSION,
+        "coreMigrationVersion": CORE_MIGRATION,
         "id": dash["data_view_id"],
         "references": [],
         "type": "index-pattern",
+    }
+
+
+def _vislib_vis_state(chart: dict) -> dict:
+    chart_type = chart["chart"]
+    metrics = chart["metrics"]
+    aggs = [
+        {
+            "id": "1",
+            "enabled": True,
+            "type": "date_histogram",
+            "schema": "segment",
+            "params": {
+                "field": "@timestamp",
+                "useNormalizedOpenSearchInterval": True,
+                "interval": "auto",
+                "drop_partials": False,
+                "customInterval": "2h",
+                "min_doc_count": 0,
+                "extended_bounds": {},
+            },
+        }
+    ]
+    for i, m in enumerate(metrics, start=2):
+        params = {"field": m["field"]} if m.get("field") else {}
+        aggs.append(
+            {
+                "id": str(i),
+                "enabled": True,
+                "type": m["type"],
+                "schema": "metric",
+                "params": params,
+            }
+        )
+    return {
+        "title": chart["title"],
+        "type": chart_type,
+        "params": {
+            "type": chart_type,
+            "grid": {"categoryLines": False, "style": {"color": "#eee"}},
+            "categoryAxes": [
+                {
+                    "id": "CategoryAxis-1",
+                    "type": "category",
+                    "position": "bottom",
+                    "show": True,
+                    "style": {},
+                    "scale": {"type": "linear"},
+                    "labels": {"show": True, "filter": True, "truncate": 100},
+                    "title": {},
+                }
+            ],
+            "valueAxes": [
+                {
+                    "id": "ValueAxis-1",
+                    "name": "LeftAxis-1",
+                    "type": "value",
+                    "position": "left",
+                    "show": True,
+                    "style": {},
+                    "scale": {"type": "linear", "mode": "normal"},
+                    "labels": {"show": True, "rotate": 0, "filter": False, "truncate": 100},
+                    "title": {"text": ""},
+                }
+            ],
+            "seriesParams": [
+                {
+                    "show": True,
+                    "type": chart_type,
+                    "mode": "normal",
+                    "data": {"label": m["label"], "id": str(i)},
+                    "valueAxis": "ValueAxis-1",
+                    "drawLinesBetweenPoints": True,
+                    "showCircles": True,
+                }
+                for i, m in enumerate(metrics, start=2)
+            ],
+            "addTooltip": True,
+            "addLegend": True,
+            "legendPosition": "right",
+            "timeseries": [],
+            "thresholdLine": {"show": False, "value": 10, "width": 1, "style": "full", "color": "#34130C"},
+        },
+        "aggs": aggs,
     }
 
 
@@ -146,20 +162,22 @@ def visualization_object(dash: dict, chart: dict) -> dict:
         "attributes": {
             "title": chart["title"],
             "description": chart.get("description", ""),
-            "visualization": {
-                "id": chart["chart"],
-                "type": chart["chart"],
-                "params": tsvb_params(chart["chart"]),
-                "aggs": tsvb_aggs(chart["metrics"]),
-                "aggsSchema": tsvb_aggs_schema(chart["metrics"]),
+            "visState": json.dumps(_vislib_vis_state(chart), separators=(",", ":")),
+            "uiStateJSON": "{}",
+            "kibanaSavedObjectMeta": {
+                "searchSourceJSON": _search_source(dash["data_view_id"], chart.get("filters", [])),
             },
-            "searchSourceJSON": search_source(dash["data_view_id"], chart.get("filters", [])),
         },
-        "coreMigrationVersion": MIGRATION_VERSION,
+        "coreMigrationVersion": CORE_MIGRATION,
         "id": chart["viz_id"],
         "references": [
-            {"id": dash["data_view_id"], "name": "index", "type": "index-pattern"}
+            {
+                "id": dash["data_view_id"],
+                "name": "kibanaSavedObjectMeta.searchSourceJSON.index",
+                "type": "index-pattern",
+            }
         ],
+        "migrationVersion": {"visualization": VIZ_MIGRATION},
         "type": "visualization",
     }
 
@@ -168,30 +186,35 @@ def dashboard_object(dash: dict, charts: list) -> dict:
     viz_by_title = {c["title"]: c["viz_id"] for c in charts}
     panels = []
     references = []
-    for i, panel in enumerate(dash["panels"]):
-        index = f"p-{i + 1}"
+    for i, panel in enumerate(dash["panels"], start=1):
         viz_id = viz_by_title[panel["title"]]
-        panels.append({
-            "embeddableConfig": {"id": viz_id, "type": "visualization"},
-            "gridData": {"x": panel["x"], "y": panel["y"], "w": panel["w"], "h": panel["h"], "i": index},
-            "panelIndex": index,
-            "version": 1,
-        })
-        references.append({"id": viz_id, "name": index, "type": "visualization"})
+        panels.append(
+            {
+                "version": "7.3.0",
+                "type": "visualization",
+                "panelIndex": str(i),
+                "embeddableConfig": {},
+                "gridData": {
+                    "x": panel["x"], "y": panel["y"], "w": panel["w"], "h": panel["h"], "i": str(i),
+                },
+                "id": viz_id,
+            }
+        )
+        references.append({"id": viz_id, "name": f"panel_{i}", "type": "visualization"})
     return {
         "attributes": {
             "title": dash["title"],
             "description": dash.get("description", ""),
-            "panels": panels,
-            "attributesSchemaVersion": 2,
-            "options": {"useMargins": False, "hidePanelTitles": False, "adhocDatasets": []},
-            "refreshInterval": {"display": "10 seconds", "pause": False, "value": 10000},
-            "timeRestore": False,
+            "hits": 0,
             "version": 1,
+            "timeRestore": False,
+            "optionsJSON": json.dumps({"useMargins": False, "hidePanelTitles": False}, separators=(",", ":")),
+            "panelsJSON": json.dumps(panels, separators=(",", ":")),
         },
-        "coreMigrationVersion": MIGRATION_VERSION,
+        "coreMigrationVersion": CORE_MIGRATION,
         "id": dash["id"],
         "references": references,
+        "migrationVersion": {"dashboard": DASH_MIGRATION},
         "type": "dashboard",
     }
 
