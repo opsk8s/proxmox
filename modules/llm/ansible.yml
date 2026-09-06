@@ -372,7 +372,26 @@
 #      become: true
 #      become_user: llm
 #
+    - name: Download Qwen3.8 Flash MTP
+      ansible.builtin.shell: |
+        # Ensure target directory exists
+        mkdir -p /mnt/models
 
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen3.8-Flash-Next-GGUF/resolve/main/MTP/mtp-Qwen3.8-Flash-Next-Q4_K_M.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen3.8-Flash-Next-mtp-Q4_K_M.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen3.8-Flash-Next-mtp-Q4_K_M.gguf
+      become: true
+      become_user: llm
+#
     - name: Download Qwen3.8 Vision model via wget
       ansible.builtin.shell: |
         # Ensure target directory exists

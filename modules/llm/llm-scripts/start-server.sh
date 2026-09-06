@@ -34,11 +34,13 @@ LLAMA_BIN="$HOME/llama.cpp/build-${API}/bin/llama-server"
 shopt -s nullglob
 MODEL_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-${MODEL_QUANT}.gguf )
 MMPROJ_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-mmproj*.gguf )
+MTP_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-mtp*.gguf )
 DFLASH_MATCHES=( "$MODELS_HOME"/${MODEL_NAME}*-dflash*.gguf )
 shopt -u nullglob
 MODEL_FILE="${MODEL_MATCHES[0]:-}"
 MMPROJ_FILE="${MMPROJ_MATCHES[0]:-}"
 DFLASH_FILE="${DFLASH_MATCHES[0]:-}"
+MTP_FILE="${MTP_MATCHES[0]:-}"
 LOG_FILE="$HOME/logs/llama_server_port_${PORT}.log"
 PID_FILE="$HOME/logs/llama_server_port_${PORT}.pid"
 
@@ -229,6 +231,11 @@ if [[ "$MTP" == "mtp" ]]; then
       --spec-type draft-mtp
       --spec-draft-n-max 5
     )
+     if [ -f "$MTP_FILE" ]; then
+        LLAMA_CMD+=(
+            --model-draft "$MTP_FILE"
+        )
+     fi
 elif [[ "$MTP" == "mtp-vision" ]]; then
     LLAMA_CMD+=(
       --mmproj "$MMPROJ_FILE"
@@ -238,6 +245,11 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --spec-type draft-mtp
       --spec-draft-n-max 5
     )
+    if [ -f "$MTP_FILE" ]; then
+      LLAMA_CMD+=(
+          --model-draft "$MTP_FILE"
+      )
+    fi
 elif [[ "$MTP" == "dflash" ]]; then
     LLAMA_CMD+=(
       --model-draft "$DFLASH_FILE"

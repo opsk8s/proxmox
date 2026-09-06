@@ -71,7 +71,7 @@ resource "proxmox_virtual_environment_vm" "elk_vm" {
     datastore_id = var.vm_dir
     file_id      = var.ubuntu_image_id
     interface    = "virtio0"
-    size         = 30
+    size         = 500
     backup       = true
   }
 
