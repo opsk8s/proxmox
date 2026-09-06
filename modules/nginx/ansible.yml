@@ -205,6 +205,15 @@
               # generations can run for minutes
               proxy_read_timeout 3600s;
               proxy_send_timeout 3600s;
+
+              # Capture request + response bodies of JSON API POSTs into
+              # /var/log/nginx/bodies.log (shipped to nginx-body-* on the ELK
+              # VM). The script is phase-switched (access/body_filter/log) and
+              # pcall-guarded so a capture failure never breaks the proxy.
+              # Correlate with nginx-access-* analytics via request_id.
+              access_by_lua_file      /etc/nginx/lua/body-capture.lua;
+              body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
+              log_by_lua_file         /etc/nginx/lua/body-capture.lua;
           }
       }
 
@@ -249,6 +258,157 @@
           Index              nginx-access-%Y.%m.%d
           Suppress_Type_Name On
 
+      [INPUT]
+          Name         tail
+          Tag          nginx-body
+          Path         /var/log/nginx/bodies.log
+          DB           /var/lib/fluent-bit/fluent-bit-body.db
+          Parser       nginx_json
+
+      [FILTER]
+          Name    modify
+          Match   nginx-body
+          Set     source nginx-body
+
+      [OUTPUT]
+          Name               opensearch
+          Match              nginx-body
+          Host               {{ elk_ip }}
+          Port               9200
+          # strftime is applied per flush → nginx-body-YYYY.MM.DD (own index
+          # template + shared 14d ISM policy on the ELK VM)
+          Index              nginx-body-%Y.%m.%d
+          Suppress_Type_Name On
+
+    # Lua capture script for request/response bodies on the app.llm.lan
+    # vhost (see the llm_vhost server block above). Deployed to
+    # /etc/nginx/lua/body-capture.lua and run in three phases of each
+    # request: access (read body + decide), body_filter (accumulate response
+    # chunks, streaming included), log (write one JSON line per request).
+    body_capture_lua: |
+      -- Captures request + response bodies of JSON API POSTs proxied to the
+      -- LLM upstream. One JSON line per request in /var/log/nginx/bodies.log.
+      -- Correlate with the nginx-access-* analytics via request_id.
+      -- Every fallible step is pcall-guarded: failures only reach the nginx
+      -- error log, never the proxied request.
+      local cjson = require "cjson.safe"
+      local LOG = "/var/log/nginx/bodies.log"
+      -- Memory ceiling for ONE in-flight accumulation. Protects the proxy
+      -- from a runaway/streaming response OOMing it; bodies are stored
+      -- uncapped below this (flagged truncated if the ceiling is hit).
+      local MAX_ACCUM = 64 * 1024 * 1024
+
+      local function log_error(...)
+        ngx.log(ngx.ERR, "[body-capture] ", ...)
+      end
+
+      local function read_request_body()
+        ngx.req.read_body()
+        local data = ngx.req.get_body_data()
+        if data then
+          return data
+        end
+        -- Body spilled to a temp file (client_body_buffer_size exceeded)
+        local file = ngx.req.get_body_file()
+        if not file then
+          return ""
+        end
+        local f, err = io.open(file, "rb")
+        if not f then
+          log_error("cannot read body file ", file, ": ", err)
+          return ""
+        end
+        local buf = f:read("*a")
+        f:close()
+        return buf or ""
+      end
+
+      local phase = ngx.get_phase()
+
+      if phase == "access" then
+        local ct = ngx.var.http_content_type or ""
+        ngx.ctx.bc = {
+          active = ngx.req.get_method() == "POST"
+              and string.find(ct, "json", 1, true) ~= nil,
+          req_body = "",
+          chunks = {},
+          size = 0,
+          overflow = false,
+        }
+        if ngx.ctx.bc.active then
+          local ok, body = pcall(read_request_body)
+          if ok then
+            ngx.ctx.bc.req_body = body
+          else
+            log_error("request body read failed: ", body)
+          end
+        end
+
+      elseif phase == "body_filter" then
+        local c = ngx.ctx.bc
+        if not (c and c.active) then
+          return
+        end
+        local chunk = ngx.arg[1]
+        if chunk and #chunk > 0 and not c.overflow then
+          if c.size + #chunk > MAX_ACCUM then
+            c.overflow = true
+            log_error("response body exceeded ", MAX_ACCUM,
+                      " bytes, capture truncated for ", ngx.var.request_id)
+          else
+            c.chunks[#c.chunks + 1] = chunk
+            c.size = c.size + #chunk
+          end
+        end
+
+      elseif phase == "log" then
+        local c = ngx.ctx.bc
+        if not (c and c.active) then
+          return
+        end
+        local rec = {
+          time_local  = os.date("!%Y-%m-%dT%H:%M:%SZ"),
+          host        = ngx.var.host,
+          request_id  = ngx.var.request_id,
+          remote_addr = ngx.var.remote_addr,
+          method      = ngx.req.get_method(),
+          uri         = ngx.var.uri,
+          status      = ngx.var.status,
+          request_content_type  = ngx.var.http_content_type or "",
+          response_content_type = ngx.var.sent_http_content_type or "",
+          request_body   = c.req_body,
+          response_body  = table.concat(c.chunks),
+          request_body_bytes  = #c.req_body,
+          response_body_bytes = c.size,
+          truncated = c.overflow,
+          source    = "nginx",
+        }
+        local json = cjson.encode(rec)
+        if not json then
+          log_error("encode failed for ", ngx.var.request_id)
+          return
+        end
+        local ok, err = pcall(function()
+          local f = assert(io.open(LOG, "a"))
+          f:write(json, "\n")
+          f:close()
+        end)
+        if not ok then
+          log_error("write to ", LOG, " failed: ", err)
+        end
+      end
+
+    logrotate_bodies_conf: |
+      /var/log/nginx/bodies.log {
+          daily
+          rotate 7
+          copytruncate
+          compress
+          missingok
+          notifempty
+          create 0640 www-data adm
+      }
+
     parsers_conf: |
       [PARSER]
           Name   nginx_json
@@ -277,6 +437,19 @@
         name:
           - nginx
         state: present
+
+    # Response-body capture on the llm vhost needs ngx_http_lua_module
+    # (body_filter_by_lua_file). Ubuntu ships it as a module package that
+    # self-registers under /etc/nginx/modules-enabled. lua-cjson provides
+    # cjson.safe for the JSON encoding in the capture script.
+    - name: Install lua module for nginx (body capture)
+      ansible.builtin.apt:
+        update_cache: false
+        name:
+          - libnginx-mod-http-lua
+          - lua-cjson
+        state: present
+      notify: restart nginx
 
     # The distro default site owns 80 default_server and would collide with
     # ours — remove it.
@@ -317,6 +490,7 @@
         - { file: "app-jenkins.conf", content: "{{ jenkins_vhost }}" }
         - { file: "app-open-webui.conf", content: "{{ open_webui_vhost }}" }
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
+      notify: restart nginx
 
     - name: Enable virtual hosts
       ansible.builtin.file:
@@ -343,6 +517,40 @@
         regexp: '^\s*access_log /var/log/nginx/access\.log;\s*$'
         line: '# disabled: /etc/nginx/conf.d/10-logging.conf writes the JSON access log to this path'
       notify: restart nginx
+
+    # --- Body capture (llm vhost request/response bodies) ----------------------
+    - name: Create lua directory for the body capture script
+      ansible.builtin.file:
+        path: /etc/nginx/lua
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Deploy body capture script (llm vhost)
+      ansible.builtin.copy:
+        dest: /etc/nginx/lua/body-capture.lua
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ body_capture_lua }}"
+      notify: restart nginx
+
+    - name: Ensure the body capture log exists and is writable by nginx
+      ansible.builtin.file:
+        path: /var/log/nginx/bodies.log
+        state: touch
+        owner: www-data
+        group: adm
+        mode: "0640"
+
+    - name: Deploy logrotate for the body capture log
+      ansible.builtin.copy:
+        dest: /etc/logrotate.d/nginx-bodies
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ logrotate_bodies_conf }}"
 
     - name: Check nginx configuration syntax
       ansible.builtin.command:
@@ -383,6 +591,37 @@
       until: nginx_kibana.status == 200
       retries: 30
       delay: 10
+      changed_when: false
+
+    # Notified restart handlers only flush at play END, so the capture
+    # verification below would otherwise probe a still-old nginx. Restart
+    # here explicitly (idempotent — also loads the newly installed lua module
+    # and the lua-file-backed config).
+    - name: Restart nginx to load the body capture configuration
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+
+    - name: Wait for nginx to listen again
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 80
+        timeout: 60
+
+    # Any HTTP response works (even a 4xx/502 from llama) — the capture hooks
+    # in the llm location run on POST+json requests regardless of status, so
+    # a non-empty bodies.log proves the lua script ran end to end.
+    - name: Verify body capture records a JSON POST through the llm vhost
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -s -o /dev/null -X POST -H 'Host: app.llm.lan' \
+          -H 'Content-Type: application/json' \
+          --data '{"capture_probe":true}' \
+          http://127.0.0.1/health
+        sleep 2
+        grep -q capture_probe /var/log/nginx/bodies.log
+      args:
+        executable: /bin/bash
       changed_when: false
 
     # --- Fluent Bit (JSON access log -> OpenSearch) -----------------------------

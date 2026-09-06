@@ -84,15 +84,17 @@
         mappings:
           properties: {}
 
-    # Indices: Filebeat on the nginx VM ships the JSON access log into
-    # nginx-access-YYYY.MM.dd (see modules/nginx/ansible.yml).
+    # Indices: Fluent Bit on the nginx VM ships the JSON access log into
+    # nginx-access-YYYY.MM.dd and the captured request/response bodies of the
+    # LLM API into nginx-body-YYYY.MM.dd (see modules/nginx/ansible.yml).
     nginx_ism_policy:
       policy:
-        description: nginx-access 14-day retention (was ES 9 ILM policy)
+        description: nginx access/body 14-day retention (was ES 9 ILM policy)
         default_state: hot
         ism_template:
           index_patterns:
             - nginx-access-*
+            - nginx-body-*
         states:
           - name: hot
             actions: []
@@ -132,6 +134,52 @@
             upstream_response_time:
               type: double
               ignore_malformed: true
+
+    # Request/response bodies captured by the lua module on the nginx proxy
+    # for LLM JSON API calls (modules/nginx/ansible.yml). request_id matches
+    # the nginx-access-* analytics record of the same proxied request. The
+    # bodies are mapped as full-text (searchable) without keyword subfields,
+    # so multi-MB payloads are not duplicated in an unindexed keyword copy.
+    nginx_body_index_template:
+      index_patterns:
+        - nginx-body-*
+      priority: 200
+      template:
+        settings:
+          index.number_of_shards: 1
+          index.number_of_replicas: 0
+          index.plugins.index_state_management.policy_id: nginx-access-14d
+        mappings:
+          properties:
+            status:
+              type: long
+              ignore_malformed: true
+            request_body_bytes:
+              type: long
+              ignore_malformed: true
+            response_body_bytes:
+              type: long
+              ignore_malformed: true
+            request_id:
+              type: keyword
+            method:
+              type: keyword
+            host:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 256
+            uri:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 256
+            request_body:
+              type: text
+            response_body:
+              type: text
 
     # ----------------------------------------------------------------------------
     # Ingest pipeline for llama-server slot/timing lines.
@@ -653,6 +701,14 @@
         method: PUT
         body_format: json
         body: "{{ nginx_index_template | to_nice_json }}"
+        status_code: 200
+
+    - name: Deploy nginx index template (nginx-body-*)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_index_template/nginx-body"
+        method: PUT
+        body_format: json
+        body: "{{ nginx_body_index_template | to_nice_json }}"
         status_code: 200
 
     # _simulate response shape: docs[0].doc._source — same as ES 9.
