@@ -9,9 +9,15 @@
 #   app.llm.lan                        -> llm:8001-8004 (round robin)
 #
 # Every request is recorded with the json_analytics log format (one JSON
-# object per line). Filebeat on this VM ships /var/log/nginx/access.log to
-# Elasticsearch on the ELK VM (indices nginx-access-*, 14d ILM — both owned
-# by modules/elk/ansible.yml).
+# object per line). Fluent Bit on this VM ships /var/log/nginx/access.log to
+# OpenSearch on the ELK VM (indices nginx-access-*, 14d ISM retention — both
+# owned by modules/elk/ansible.yml).
+#
+# Shipper history: Filebeat was replaced on 2026-09-06. Beats >=7.13 run an
+# unconditional on-connect license probe (GET /_license) that OpenSearch
+# answers with 400, so Filebeat refuses to connect; beats <=7.12 predate
+# filestream and 7.10.2 segfaults on Ubuntu 26.04 (kernel 7.0). Fluent Bit
+# has a native opensearch output and is the OpenSearch-recommended shipper.
 - name: Deploy NGINX reverse proxy (VM)
   hosts: nginx
   become: true
@@ -202,68 +208,51 @@
           }
       }
 
-    # --- Filebeat ------------------------------------------------------------------
-    filebeat_config: |
-      filebeat.inputs:
-        # nginx JSON access log (log_format json_analytics). One JSON object
-        # per line — decoded into top-level fields by the
-        # decode_json_fields processor below.
-        - type: filestream
-          id: nginx-access-logs
-          paths:
-            - /var/log/nginx/access.log
-          fields:
-            source: nginx
-          fields_under_root: true
+    # --- Fluent Bit (nginx access log -> OpenSearch) ---------------------------
+    # The access log is one JSON object per line; the json parser merges the
+    # keys at the record root (the vhost lives in "host"). Numeric fields
+    # arrive as STRINGS ("0.000", "200") and upstream_response_time is "" for
+    # the default vhost — they are coerced on the OpenSearch side by the
+    # nginx-access index template mappings (ignore_malformed), see
+    # modules/elk/ansible.yml. @timestamp = Fluent Bit read time; the
+    # proxies are live so read time and log time agree within seconds.
+    fluent_conf: |
+      [SERVICE]
+          Flush         1
+          Daemon        Off
+          Log_Level     info
+          Parsers_File  parsers.conf
+          HTTP_Server   On
+          HTTP_Listen   127.0.0.1
+          HTTP_Port     2020
 
-      processors:
-        # Filebeat 9.x has no filestream json codec — the line has to be
-        # decoded explicitly. target "" merges the keys at the event root
-        # (the old json.keys_under_root); overwrite_keys lets the log's
-        # "host" (the vhost) win over the ECS host object, which the
-        # dashboards group by.
-        - decode_json_fields:
-            fields: ["message"]
-            target: ""
-            overwrite_keys: true
-            add_error_key: true
-        # time_local: "04/Sep/2026:12:34:56 +0200" (nginx default time format)
-        - timestamp:
-            field: "time_local"
-            layouts:
-              - "02/Jan/2006:15:04:05 -0700"
-            target_field: "@timestamp"
-        # nginx emits every value as a string; the dashboards need numbers.
-        # 9.x convert: `type` is the target type and `to` is the destination
-        # field — omitting `to` converts in place. fail_on_error: false keeps
-        # the non-proxied case (upstream_response_time is "" for the default
-        # vhost) from failing the event.
-        - convert:
-            fields:
-              - from: request_time
-                type: double
-              - from: upstream_response_time
-                type: double
-              - from: body_bytes_sent
-                type: long
-            fail_on_error: false
+      [INPUT]
+          Name         tail
+          Tag          nginx
+          Path         /var/log/nginx/access.log
+          Exclude_Path *log.*
+          DB           /var/lib/fluent-bit/fluent-bit.db
+          Parser       nginx_json
 
-      output.elasticsearch:
-        hosts: ["http://{{ elk_ip }}:9200"]
-        index: "nginx-access-%{+yyyy.MM.dd}"
+      [FILTER]
+          Name    modify
+          Match   nginx
+          Set     source nginx
 
-      # Local-only health/monitoring endpoint (checked by the playbook).
-      http:
-        host: 127.0.0.1
-        port: 5066
+      [OUTPUT]
+          Name               opensearch
+          Match              nginx
+          Host               {{ elk_ip }}
+          Port               9200
+          # strftime is applied per flush → nginx-access-YYYY.MM.DD, matching
+          # the nginx-access-* index template / ISM policy on the ELK VM
+          Index              nginx-access-%Y.%m.%d
+          Suppress_Type_Name On
 
-      # Index template and ILM policy are owned by the ELK VM
-      # (modules/elk/ansible.yml) — Filebeat must not create its own.
-      setup:
-        template:
-          enabled: false
-        ilm:
-          enabled: false
+    parsers_conf: |
+      [PARSER]
+          Name   nginx_json
+          Format json
 
   tasks:
     - name: Wait for SSH (first boot)
@@ -396,26 +385,47 @@
       delay: 10
       changed_when: false
 
-    # --- Filebeat (JSON access log -> Elasticsearch) ------------------------------
+    # --- Fluent Bit (JSON access log -> OpenSearch) -----------------------------
+    - name: Stop and disable Filebeat (replaced by Fluent Bit)
+      ansible.builtin.systemd:
+        name: filebeat
+        state: stopped
+        enabled: false
+      failed_when: false
+
+    - name: Remove Filebeat package
+      ansible.builtin.apt:
+        name: filebeat
+        state: absent
+
+    - name: Remove the Elastic APT repository and key (no longer used)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/elastic.sources
+        - /etc/apt/keyrings/elasticsearch.gpg
+
     - name: Create apt keyrings directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
 
-    - name: Fetch Elastic GPG key
-      ansible.builtin.shell:
-        cmd: curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
-        creates: /etc/apt/keyrings/elasticsearch.gpg
+    - name: Fetch Fluent Bit GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /etc/apt/keyrings/fluentbit.gpg
+      args:
+        creates: /etc/apt/keyrings/fluentbit.gpg
 
-    - name: Add Elastic APT repository (9.x)
+    - name: Add Fluent Bit APT repository (Ubuntu resolute)
       ansible.builtin.deb822_repository:
-        name: elastic
+        name: fluentbit
         types: deb
-        uris: https://artifacts.elastic.co/packages/9.x/apt
-        suites: stable
+        uris: https://packages.fluentbit.io/ubuntu/resolute
+        suites: resolute
         components: [main]
-        signed_by: /etc/apt/keyrings/elasticsearch.gpg
+        signed_by: /etc/apt/keyrings/fluentbit.gpg
         state: present
 
     # Hard-fail on update errors (the apt module can swallow them — see the
@@ -426,50 +436,84 @@
       register: apt_update
       failed_when: apt_update.rc != 0
 
-    - name: Install Filebeat (9.x)
+    - name: Install Fluent Bit
       ansible.builtin.apt:
         update_cache: false
         name:
-          - filebeat=9.*
+          - fluent-bit
         state: present
 
-    - name: Stop Filebeat before reconfiguring
-      ansible.builtin.systemd:
-        name: filebeat
-        state: stopped
-      failed_when: false
-
-    - name: Deploy Filebeat configuration
+    - name: Deploy Fluent Bit parsers
       ansible.builtin.copy:
-        dest: /etc/filebeat/filebeat.yml
+        dest: /etc/fluent-bit/parsers.conf
         owner: root
         group: root
         mode: "0644"
-        content: "{{ filebeat_config }}"
+        content: "{{ parsers_conf }}"
 
-    # Filebeat buffers and retries on output failure, so a late-starting ES is
-    # not fatal — but wait for it here to get a clean first run. On a fresh
-    # apply the ELK VM may still be provisioning (this play can race the
-    # module.elk action trigger), hence the long timeout.
-    - name: Wait for Elasticsearch
+    - name: Deploy Fluent Bit configuration
+      ansible.builtin.copy:
+        dest: /etc/fluent-bit/fluent-bit.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ fluent_conf }}"
+
+    - name: Deploy Fluent Bit service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/fluent-bit.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Fluent Bit (nginx access log shipper)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Create Fluent Bit state directory (tail offset DB)
+      ansible.builtin.file:
+        path: /var/lib/fluent-bit
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Enable and start Fluent Bit
+      ansible.builtin.systemd:
+        name: fluent-bit
+        # restarted: picks up config changes on re-runs (started is a
+        # no-op when the unit is already running)
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    # Fluent Bit buffers and retries on output failure, so a late-starting
+    # OpenSearch is not fatal — but wait for it here to get a clean first
+    # run. On a fresh apply the ELK VM may still be provisioning (this play
+    # can race the module.elk action trigger), hence the long timeout.
+    - name: Wait for OpenSearch
       ansible.builtin.wait_for:
         host: "{{ elk_ip }}"
         port: 9200
         timeout: 900
 
-    - name: Start and enable Filebeat
-      ansible.builtin.systemd:
-        name: filebeat
-        state: started
-        enabled: true
-
-    - name: Verify Filebeat is healthy
+    - name: Verify Fluent Bit is healthy
       ansible.builtin.uri:
-        url: "http://127.0.0.1:5066"
-        status_code: [200, 405]
+        url: "http://127.0.0.1:2020/"
+        status_code: 200
         timeout: 10
-      register: filebeat_monitoring
-      until: filebeat_monitoring.status in [200, 405]
+      register: fluent_health
+      until: fluent_health.status == 200
       retries: 6
       delay: 5
       changed_when: false

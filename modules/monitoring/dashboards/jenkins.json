@@ -57,7 +57,7 @@
       },
       "targets": [
         {
-          "expr": "jenkins_agents{status=\"online\"}",
+          "expr": "count(default_jenkins_nodes_online == 1)",
           "refId": "A"
         }
       ]
@@ -104,7 +104,7 @@
       },
       "targets": [
         {
-          "expr": "jenkins_builds_queued",
+          "expr": "sum(jenkins_queue_buildable_value) + sum(jenkins_queue_blocked_value)",
           "refId": "A"
         }
       ]
@@ -151,7 +151,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(jenkins_builds_total[24h]))",
+          "expr": "sum(increase(jenkins_runs_total_total[24h]))",
           "refId": "A"
         }
       ]
@@ -202,7 +202,7 @@
       },
       "targets": [
         {
-          "expr": "sum(increase(jenkins_builds_total{status=\"FAILURE\"}[24h]))",
+          "expr": "sum(increase(jenkins_runs_failure_total[24h]))",
           "refId": "A"
         }
       ]
@@ -210,7 +210,7 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Builds started per hour by status",
+      "title": "Builds started per hour by result",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -240,9 +240,27 @@
       },
       "targets": [
         {
-          "expr": "sum by (status) (increase(jenkins_builds_total[1h]))",
-          "legendFormat": "{{status}}",
+          "expr": "sum(increase(jenkins_runs_success_total[1h]))",
+          "legendFormat": "success",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum(increase(jenkins_runs_failure_total[1h]))",
+          "legendFormat": "failure"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "C",
+          "expr": "sum(increase(jenkins_runs_aborted_total[1h]))",
+          "legendFormat": "aborted"
         }
       ]
     },
@@ -279,7 +297,7 @@
       },
       "targets": [
         {
-          "expr": "jenkins_builds_queued",
+          "expr": "sum(jenkins_queue_buildable_value) + sum(jenkins_queue_blocked_value)",
           "legendFormat": "queued",
           "refId": "A"
         }
@@ -288,7 +306,7 @@
     {
       "id": 7,
       "type": "timeseries",
-      "title": "Avg build duration per job (1h)",
+      "title": "Median build duration (s)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -318,8 +336,8 @@
       },
       "targets": [
         {
-          "expr": "rate(jenkins_build_duration_seconds_sum[1h]) / rate(jenkins_build_duration_seconds_count[1h])",
-          "legendFormat": "{{name}}",
+          "expr": "jenkins_job_total_duration{quantile=\"0.5\"}",
+          "legendFormat": "p50",
           "refId": "A"
         }
       ]
@@ -327,7 +345,7 @@
     {
       "id": 8,
       "type": "timeseries",
-      "title": "p95 build duration (1h)",
+      "title": "p95 build duration (s)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -357,7 +375,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(jenkins_build_duration_seconds_bucket[1h])))",
+          "expr": "jenkins_job_total_duration{quantile=\"0.95\"}",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -366,7 +384,7 @@
     {
       "id": 9,
       "type": "timeseries",
-      "title": "Agents by status",
+      "title": "Agents by status (executors online/connecting)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -396,16 +414,25 @@
       },
       "targets": [
         {
-          "expr": "jenkins_agents",
-          "legendFormat": "{{status}}",
+          "expr": "sum by (label) (default_jenkins_executors_online)",
+          "legendFormat": "{{label}} online",
           "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "refId": "B",
+          "expr": "sum by (label) (default_jenkins_executors_connecting)",
+          "legendFormat": "{{label}} connecting"
         }
       ]
     },
     {
       "id": 10,
       "type": "timeseries",
-      "title": "Items by type",
+      "title": "Projects (total)",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -435,8 +462,8 @@
       },
       "targets": [
         {
-          "expr": "jenkins_items",
-          "legendFormat": "{{type}}",
+          "expr": "sum(jenkins_project_count_value)",
+          "legendFormat": "projects",
           "refId": "A"
         }
       ]

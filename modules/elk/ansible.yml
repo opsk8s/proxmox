@@ -51,6 +51,12 @@
       policy:
         description: llm-logs 14-day retention (was ES 9 ILM policy)
         default_state: hot
+        # auto-manage any NEW index matching the pattern on the next
+        # coordinator sweep (deterministic, vs. relying on the settings
+        # policy_id scan); combined with the template setting below
+        ism_template:
+          index_patterns:
+            - llm-logs-*
         states:
           - name: hot
             actions: []
@@ -84,6 +90,9 @@
       policy:
         description: nginx-access 14-day retention (was ES 9 ILM policy)
         default_state: hot
+        ism_template:
+          index_patterns:
+            - nginx-access-*
         states:
           - name: hot
             actions: []
@@ -106,7 +115,23 @@
           index.number_of_replicas: 0
           index.plugins.index_state_management.policy_id: nginx-access-14d
         mappings:
-          properties: {}
+          # Fluent Bit ships the json_analytics values as STRINGS; numeric
+          # fields are coerced here (the "" upstream_response_time for the
+          # default vhost is dropped via ignore_malformed). Everything else
+          # stays dynamic (keyword).
+          properties:
+            status:
+              type: long
+              ignore_malformed: true
+            body_bytes_sent:
+              type: long
+              ignore_malformed: true
+            request_time:
+              type: double
+              ignore_malformed: true
+            upstream_response_time:
+              type: double
+              ignore_malformed: true
 
     # ----------------------------------------------------------------------------
     # Ingest pipeline for llama-server slot/timing lines.

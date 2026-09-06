@@ -250,11 +250,13 @@
         group: postgres
         mode: "0640"
         content: |
-          PGHOST=127.0.0.1
-          PGPORT=5432
-          PGUSER=postgres
-          PGPASSWORD={{ postgres_password }}
+          # postgres_exporter >=0.15 no longer derives the DSN from PG*
+          # env vars (lib/pq removed) — it needs DATA_SOURCE_NAME or it
+          # logs "Failed to create PostgresCollector: empty dsn" and only
+          # exports pg_up/go boilerplate.
+          DATA_SOURCE_NAME=postgresql://postgres:{{ postgres_password }}@127.0.0.1:5432/postgres?sslmode=disable
           PGDATA=/var/lib/postgresql/{{ pg_version.stdout }}/main
+      register: pg_env_cfg
       when: "'postgres' in group_names"
 
     - name: Deploy postgres_exporter service
@@ -289,6 +291,14 @@
         state: started
         enabled: true
       when: "'postgres' in group_names"
+
+    # restart picks up an env-file change on re-runs (started is a no-op
+    # when the unit is already running — the exporter kept a stale DSN)
+    - name: Restart postgres_exporter (credentials changed)
+      ansible.builtin.systemd:
+        name: postgres_exporter
+        state: restarted
+      when: "'postgres' in group_names and pg_env_cfg is changed"
 
     - name: Wait for postgres_exporter to listen
       ansible.builtin.wait_for:

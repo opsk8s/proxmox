@@ -1,14 +1,20 @@
 ---
 # Request-plane observability for the LLM VM (standalone, non-disruptive):
-#   Filebeat shipper for llama-server slot/timing logs (one server per
-#   port 8001-8004) into Elasticsearch on the ELK VM (192.168.51.207),
+#   Fluent Bit ships llama-server slot/timing logs (one server per
+#   port 8001-8004) into OpenSearch on the ELK VM (192.168.51.207),
 #   indices llm-logs-*.
 #
 # This play is standalone so observability can be (re)rolled out WITHOUT the
 # disruptive full llm playbook run (dist-upgrade + possible driver reboot).
 #
+# Shipper history: Filebeat was replaced on 2026-09-06. Beats >=7.13 run an
+# unconditional on-connect license probe (GET /_license) that OpenSearch
+# answers with 400, so Filebeat refuses to connect; beats <=7.12 predate
+# filestream and 7.10.2 segfaults on Ubuntu 26.04 (kernel 7.0). Fluent Bit
+# has a native opensearch output and is the OpenSearch-recommended shipper.
+#
 # Run: make deploy-llm-observability   (ELK VM must be up first)
-- name: LLM llama-server log shipping (Filebeat -> Elasticsearch)
+- name: LLM llama-server log shipping (Fluent Bit -> OpenSearch)
   hosts: llm
   become: true
   gather_facts: false
@@ -16,37 +22,52 @@
     ansible_python_interpreter: /usr/bin/python3
     # es_host: the Makefile passes it via --extra-vars (proxmox.tfvars)
 
-    filebeat_config: |
-      filebeat.inputs:
-        # llama-server per-slot events. One event per line in the current
-        # llama.cpp master build; the D.SS.mmm.mmm clock in the lines is
-        # process-RELATIVE, so @timestamp = read time is the correct event
-        # time. logrotate(1) uses copytruncate — filestream resets its
-        # offset automatically when it detects the truncation.
-        - type: filestream
-          id: llama-server-logs
-          paths:
-            - /home/llm/logs/llama_server_port_*.log
-          fields:
-            source: llama
-          fields_under_root: true
+    # The llama log lines use a process-RELATIVE clock (D.SS.mmm.mmm), so
+    # @timestamp = Fluent Bit read time is the correct event time — the
+    # grok pipeline on the ELK VM parses the raw 'message'. logrotate uses
+    # copytruncate; rotated files (*.log.1, *.gz) are excluded so a first
+    # run never backfills old content.
+    fluent_conf: |
+      [SERVICE]
+          Flush         1
+          Daemon        Off
+          Log_Level     info
+          Parsers_File  parsers.conf
+          HTTP_Server   On
+          HTTP_Listen   127.0.0.1
+          HTTP_Port     2020
 
-      output.elasticsearch:
-        hosts: ["http://{{ es_host }}:9200"]
-        index: "llm-logs-%{+yyyy.MM.dd}"
+      [INPUT]
+          Name           tail
+          Tag            llama
+          Path           /home/llm/logs/llama_server_port_*.log
+          Exclude_Path   *log.*
+          Read_from_Head On
+          DB             /var/lib/fluent-bit/fluent-bit.db
+          Parser         raw_line
 
-      # Local-only health/monitoring endpoint (checked by the playbook).
-      http:
-        host: 127.0.0.1
-        port: 5066
+      [FILTER]
+          Name    modify
+          Match   llama
+          Set     source llama
 
-      # Index template, ILM policy and the llama grok pipeline are owned by
-      # the ELK VM (modules/elk/ansible.yml) — Filebeat must not create its own.
-      setup:
-        template:
-          enabled: false
-        ilm:
-          enabled: false
+      [OUTPUT]
+          Name               opensearch
+          Match              llama
+          Host               {{ es_host }}
+          Port               9200
+          # strftime is applied per flush → llm-logs-YYYY.MM.DD, matching the
+          # llm-logs-* index template / ISM policy on the ELK VM
+          Index              llm-logs-%Y.%m.%d
+          Suppress_Type_Name On
+
+    parsers_conf: |
+      # one event per log line; 'message' is what the llama-logs ingest
+      # pipeline on the ELK VM groks
+      [PARSER]
+          Name   raw_line
+          Format regex
+          Regex  ^(?<message>.*)$
 
   tasks:
     - name: Wait for SSH
@@ -55,27 +76,27 @@
         delay: 5
         sleep: 5
 
-    # --- Filebeat ----------------------------------------------------------------
+    # --- Fluent Bit -------------------------------------------------------------
     - name: Create apt keyrings directory
       ansible.builtin.file:
         path: /etc/apt/keyrings
         state: directory
         mode: "0755"
 
-    - name: Fetch Elastic GPG key
+    - name: Fetch Fluent Bit GPG key
       ansible.builtin.shell: |
-        curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
+        curl -fsSL https://packages.fluentbit.io/fluentbit.key | gpg --dearmor -o /etc/apt/keyrings/fluentbit.gpg
       args:
-        creates: /etc/apt/keyrings/elasticsearch.gpg
+        creates: /etc/apt/keyrings/fluentbit.gpg
 
-    - name: Add Elastic APT repository (9.x)
+    - name: Add Fluent Bit APT repository (Ubuntu resolute)
       ansible.builtin.deb822_repository:
-        name: elastic
+        name: fluentbit
         types: deb
-        uris: https://artifacts.elastic.co/packages/9.x/apt
-        suites: stable
+        uris: https://packages.fluentbit.io/ubuntu/resolute
+        suites: resolute
         components: [main]
-        signed_by: /etc/apt/keyrings/elasticsearch.gpg
+        signed_by: /etc/apt/keyrings/fluentbit.gpg
         state: present
 
     # Hard-fail on update errors (the apt module can swallow them — see the
@@ -86,50 +107,84 @@
       register: apt_update
       failed_when: apt_update.rc != 0
 
-    - name: Install Filebeat (9.x)
+    - name: Install Fluent Bit
       ansible.builtin.apt:
         update_cache: false
         name:
-          - filebeat=9.*
+          - fluent-bit
         state: present
 
-    - name: Stop Filebeat before reconfiguring
-      ansible.builtin.systemd:
-        name: filebeat
-        state: stopped
-      failed_when: false
-
-    - name: Deploy Filebeat configuration
+    - name: Deploy Fluent Bit parsers
       ansible.builtin.copy:
-        dest: /etc/filebeat/filebeat.yml
+        dest: /etc/fluent-bit/parsers.conf
         owner: root
         group: root
         mode: "0644"
-        content: "{{ filebeat_config }}"
+        content: "{{ parsers_conf }}"
 
-    # Filebeat buffers and retries on output failure, so a late-starting ES is
-    # not fatal — but wait for it here to get a clean first run. On a fresh
-    # apply the ELK VM may still be provisioning (this play can race the
-    # module.elk action trigger), hence the long timeout.
-    - name: Wait for Elasticsearch
+    - name: Deploy Fluent Bit configuration
+      ansible.builtin.copy:
+        dest: /etc/fluent-bit/fluent-bit.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ fluent_conf }}"
+
+    - name: Deploy Fluent Bit service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/fluent-bit.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Fluent Bit (llama log shipper)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          ExecStart=/opt/fluent-bit/bin/fluent-bit -c /etc/fluent-bit/fluent-bit.conf
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Create Fluent Bit state directory (tail offset DB)
+      ansible.builtin.file:
+        path: /var/lib/fluent-bit
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Enable and start Fluent Bit
+      ansible.builtin.systemd:
+        name: fluent-bit
+        # restarted: picks up config changes on re-runs (started is a
+        # no-op when the unit is already running)
+        state: restarted
+        enabled: true
+        daemon_reload: true
+
+    # Fluent Bit buffers and retries on output failure, so a late-starting
+    # OpenSearch is not fatal — but wait for it here to get a clean first
+    # run. On a fresh apply the ELK VM may still be provisioning (this play
+    # can race the module.elk action trigger), hence the long timeout.
+    - name: Wait for OpenSearch
       ansible.builtin.wait_for:
         host: "{{ es_host }}"
         port: 9200
         timeout: 900
 
-    - name: Start and enable Filebeat
-      ansible.builtin.systemd:
-        name: filebeat
-        state: started
-        enabled: true
-
-    - name: Verify Filebeat is healthy
+    - name: Verify Fluent Bit is healthy
       ansible.builtin.uri:
-        url: "http://127.0.0.1:5066"
-        status_code: [200, 405]
+        url: "http://127.0.0.1:2020/"
+        status_code: 200
         timeout: 10
-      register: filebeat_monitoring
-      until: filebeat_monitoring.status in [200, 405]
+      register: fluent_health
+      until: fluent_health.status == 200
       retries: 6
       delay: 5
       changed_when: false
