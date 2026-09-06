@@ -67,7 +67,7 @@ deploy-monitoring:
 		elk_ip=$(call tfvar,elk_ip) \
 		nginx_ip=$(call tfvar,nginx_ip)"
 
-# ELK VM (Elasticsearch + Kibana). Also runs automatically
+# ELK VM (OpenSearch + Dashboards). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
 deploy-elk:
 	$(ANSIBLE_PLAYBOOK) -i modules/elk/inventory.ini modules/elk/ansible.yml \

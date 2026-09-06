@@ -1,5 +1,36 @@
 ---
-- name: Deploy ELK stack (Elasticsearch + Kibana) for LLM observability
+#
+# Deploy the OpenSearch stack (OpenSearch + OpenSearch Dashboards) for LLM
+# request-plane observability. Replaces the former Elasticsearch 9 + Kibana 9
+# stack in place: the play first purges the Elastic packages (guarded — no-op
+# on a fresh VM), then installs and configures the OpenSearch 2.x bundle.
+#
+# The data is a 14-day rolling window of transient logs (ILM delete), so a
+# short gap during the migration is accepted by design — ES 9 snapshots are
+# not readable by OpenSearch and remote reindex from ES 9 is not supported.
+#
+# Endpoints (same as before — Filebeat on the LLM/nginx VMs needs no change):
+#   OpenSearch Dashboards :5601
+#   OpenSearch            :9200 (LAN IP only)
+#
+# Security is DISABLED (plugins.security.disabled=true): consistent with the
+# rest of the lab (Prometheus, node_exporter, llama /metrics are all
+# unauthenticated on the trusted LAN). Re-enable before exposing beyond
+# 192.168.51.0/24.
+#
+# Ingestion is server-side: the index template sets index.default_pipeline,
+# so Filebeat ships raw lines and OpenSearch parses/normalizes. (Filebeat
+# keeps setup.template/ilm=false — see modules/llm/observability.yml and
+# modules/nginx/ansible.yml.)
+#
+# Dashboards are classic saved objects (data views + TSVB line/area charts +
+# dashboards) imported as NDJSON via
+# POST /api/saved_objects/_import?overwrite=true — idempotent by design.
+# The chart definitions live in dashboards/*.json; the .ndjson files are
+# generated locally with dashboards/generate_ods_objects.py and committed.
+#
+
+- name: Deploy OpenSearch stack (OpenSearch + Dashboards) for LLM observability
   hosts: elk
   become: true
   gather_facts: false
@@ -9,9 +40,8 @@
 
     # Indices: Filebeat on the LLM VM ships into llm-logs-YYYY.MM.dd
     # (see modules/llm/observability.yml). 14-day retention, then delete.
-    # ES 9.x: phase actions must be an OBJECT map keyed by action name — the
-    # older array ("ordered actions") form is rejected with
-    # "ordered actions are not supported".
+    # Phase actions are an OBJECT map keyed by action name (the array form
+    # is rejected). Identical shape to the ES 9 policies this replaces.
     ilm_policy:
       policy:
         phases:
@@ -74,6 +104,9 @@
     # The leading D.SS.mmm.mmm clock is RELATIVE (process uptime), so Filebeat's
     # @timestamp (read time) is the correct event time — log_clock is only kept
     # as a string for in-log ordering.
+    #
+    # The pipeline body is verbatim from the ES 9 stack — grok / script
+    # (painless) / convert are API-compatible, so nothing needed to change.
     # ----------------------------------------------------------------------------
     llama_pipeline:
       description: Parse llama-server slot/timing log lines into structured fields
@@ -307,28 +340,69 @@
       ansible.builtin.hostname:
         name: elk
 
-    # --- Elastic APT repository (9.x) -----------------------------------------
-    - name: Create apt keyrings directory
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
+    # --- Purge the old Elastic stack (ES 9 + Kibana 9) --------------------------
+    # Guarded by dpkg: on a fresh VM neither package exists and every task
+    # below is a no-op. On the in-place migration VM this stops and removes
+    # the running stack so OpenSearch can take over :9200 / :5601.
+    #
+    # No data is carried over on purpose — see the play header.
 
-    - name: Fetch Elastic GPG key
+    - name: Check for installed Elastic packages
+      ansible.builtin.shell: dpkg-query -W elasticsearch kibana 2>/dev/null | grep -c . || true
+      register: elastic_pkgs
+      changed_when: false
+
+    - name: Stop Elasticsearch and Kibana
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: false
+      loop: [elasticsearch, kibana]
+      when: elastic_pkgs.stdout | int > 0
+
+    - name: Purge Elasticsearch and Kibana packages
       ansible.builtin.shell: |
-        curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | gpg --dearmor -o /etc/apt/keyrings/elasticsearch.gpg
-      args:
-        creates: /etc/apt/keyrings/elasticsearch.gpg
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get -y purge elasticsearch kibana
+      when: elastic_pkgs.stdout | int > 0
+      changed_when: true
 
-    - name: Add Elastic APT repository (9.x)
-      ansible.builtin.deb822_repository:
-        name: elastic
-        types: deb
-        uris: https://artifacts.elastic.co/packages/9.x/apt
-        suites: stable
-        components: [main]
-        signed_by: /etc/apt/keyrings/elasticsearch.gpg
-        state: present
+    - name: Remove Elastic APT repository and GPG key
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/apt/sources.list.d/elastic.yaml
+        - /etc/apt/keyrings/elasticsearch.gpg
+
+    - name: Remove Elasticsearch and Kibana data and config
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/elasticsearch
+        - /var/log/elasticsearch
+        - /etc/elasticsearch
+        - /var/lib/kibana
+        - /var/log/kibana
+        - /etc/kibana
+        - /usr/local/share/kibana-llm-content
+
+    # --- OpenSearch APT repository (official 2.x bundle) -----------------------
+    - name: Fetch OpenSearch GPG key
+      ansible.builtin.shell: |
+        curl -fsSL https://artifacts.opensearch.org/publickeys/OpensearchProjectPublicKey.asc | gpg --dearmor -o /etc/apt/keyrings/opensearch.gpg
+      args:
+        creates: /etc/apt/keyrings/opensearch.gpg
+
+    - name: Add OpenSearch APT repository (2.x bundle)
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/opensearch.list
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          deb [arch=amd64 signed-by=/etc/apt/keyrings/opensearch.gpg] https://artifacts.opensearch.org/releases/bundle/opensearch/2.x/linux-x64 /
 
     # Hard-fail on update errors: the apt module can swallow a failed
     # `apt-get update` (transient network on first boot) and then the install
@@ -341,102 +415,71 @@
       register: apt_update
       failed_when: apt_update.rc != 0
 
-    - name: Install Elasticsearch and Kibana (9.x)
+    - name: Install OpenSearch and OpenSearch Dashboards (2.x)
       ansible.builtin.apt:
         update_cache: false
         name:
-          - elasticsearch=9.*
-          - kibana=9.*
+          - opensearch
+          - opensearch-dashboards
         state: present
-      register: elastic_install
+      register: opensearch_install
 
     # The debs' postinsts try to start both services with stock config
-    # (ES: security auto-on + random password, Kibana: no encryption key).
-    # Stop them, configure, then start cleanly.
+    # (OpenSearch: security plugin auto-configured in demo mode,
+    # Dashboards: default opensearch.hosts). Stop them, configure, then
+    # start cleanly.
     - name: Stop services started by package postinsts
       ansible.builtin.systemd:
         name: "{{ item }}"
         state: stopped
         enabled: false
-      loop: [elasticsearch, kibana]
-      when: elastic_install is changed
+      loop: [opensearch, opensearch-dashboards]
+      when: opensearch_install is changed
 
-    # --- Elasticsearch ---------------------------------------------------------
-    # Security is disabled on purpose: single-user trusted LAN, consistent with
-    # the rest of the lab (Prometheus, node_exporter, llama /metrics are all
-    # unauthenticated). Re-enable before exposing beyond 192.168.51.0/24.
-    #
-    # The ES 9 deb postinst AUTO-CONFIGURES SECURITY on first start (writes
-    # xpack.security.enabled: true + ssl + enrollment + initial_master_nodes),
-    # so settings are managed per-key (replace in place or append) — appending
-    # a block would create duplicate keys and ES refuses to start.
-    #
-    # Two postinst settings need active removal/override:
-    #   - cluster.initial_master_nodes: ILLEGAL together with discovery.type
-    #     single-node ("setting [cluster.initial_master_nodes] is not allowed
-    #     when [discovery.type] is set to [single-node]")
-    #   - http.host: 0.0.0.0 (postinst) — would override network.host and
-    #     expose HTTP on every interface, so pin it to the LAN IP.
-    - name: Remove postinst cluster.initial_master_nodes (conflicts with single-node)
-      ansible.builtin.replace:
-        path: /etc/elasticsearch/elasticsearch.yml
-        regexp: "^\\s*#?\\s*cluster\\.initial_master_nodes:.*$"
-        replace: ""
-
-    # One-time migration: an earlier playbook version appended a marker block
-    # (which collided with the postinst's auto-config). Remove it so the
-    # per-key lineinfile tasks below see a clean file. No-op on new VMs.
-    - name: Remove legacy managed block (elasticsearch.yml)
-      ansible.builtin.shell: |
-        python3 - <<'EOF'
-        import re
-        p = "/etc/elasticsearch/elasticsearch.yml"
-        s = open(p).read()
-        s2 = re.sub(r"# BEGIN ANSIBLE MANAGED BLOCK: elk\n.*?# END ANSIBLE MANAGED BLOCK: elk\n?", "", s, flags=re.S)
-        if s2 != s:
-            open(p, "w").write(s2)
-            print("removed")
-        EOF
-      register: legacy_es_block
-      changed_when: "'removed' in legacy_es_block.stdout"
-      failed_when: false
-
-    - name: Configure Elasticsearch (single-node, security off)
-      ansible.builtin.lineinfile:
-        path: /etc/elasticsearch/elasticsearch.yml
-        owner: elasticsearch
-        group: elasticsearch
+    # --- OpenSearch ------------------------------------------------------------
+    # The whole file is written (fresh install — no postinst collision to
+    # fight, unlike the ES 9 deb which auto-configures security on first
+    # start):
+    #   - network.host pins HTTP to the LAN IP only (no loopback bind, same
+    #     posture as the old ES config)
+    #   - discovery.type: single-node — no master election, no cluster
+    #   - plugins.security.disabled: true — set BEFORE first start so the
+    #     security plugin's auto-config is skipped entirely
+    # Heap: whatever the release defaults to (auto-sized on recent 2.x,
+    # ~50% of RAM; fixed 1g on older ones) is fine for this volume — bump
+    # via ES_JAVA_OPTS in /etc/default/opensearch if it ever needs it.
+    - name: Write /etc/opensearch/opensearch.yml
+      ansible.builtin.copy:
+        dest: /etc/opensearch/opensearch.yml
+        owner: opensearch
+        group: opensearch
         mode: "0660"
-        line: "{{ item }}"
-        regexp: "^[\\s#]*{{ item.split(':')[0] | trim | regex_escape }}:"
-      loop:
-        - "cluster.name: elk-home"
-        - "node.name: elk-1"
-        - "network.host: {{ es_ip }}"
-        - "http.host: {{ es_ip }}"
-        - "discovery.type: single-node"
-        - "xpack.security.enabled: false"
+        content: |
+          cluster.name: elk-home
+          node.name: elk-1
+          network.host: "{{ es_ip }}"
+          discovery.type: single-node
+          plugins.security.disabled: true
 
-    - name: Start and enable Elasticsearch
+    - name: Start and enable OpenSearch
       ansible.builtin.systemd:
-        name: elasticsearch
+        name: opensearch
         state: started
         enabled: true
 
-    # ES binds to the LAN IP only (http.host is pinned — no loopback), so wait
-    # on the LAN IP, not 127.0.0.1.
-    - name: Wait for Elasticsearch to answer
+    # OpenSearch binds to the LAN IP only (network.host is pinned — no
+    # loopback), so wait on the LAN IP, not 127.0.0.1.
+    - name: Wait for OpenSearch to answer
       ansible.builtin.wait_for:
         host: "{{ es_ip }}"
         port: 9200
         timeout: 300
 
-    # Kibana creates internal system indices (.ds-*) with replicas=1; on a
+    # Plugin/system indices (.tasks, ...) are created with replicas=1; on a
     # single-node cluster those replicas can never be assigned, so the
     # cluster sits at yellow forever and the green check below blocks.
     # Per-index updates are required — the `PUT /_all/_settings` action does
-    # NOT cover system indices (verified on 9.5.2). Idempotent no-op once
-    # every index is at 0.
+    # NOT cover system indices. Idempotent no-op once every index is at 0.
     - name: Zero replicas on all indices (single-node cluster)
       ansible.builtin.shell: |
         for idx in $(curl -s "http://{{ es_ip }}:9200/_cat/indices?expand_wildcards=all&format=json&h=index" | python3 -c "import json,sys; [print(i['index']) for i in json.load(sys.stdin)]"); do
@@ -452,12 +495,13 @@
         url: "http://{{ es_ip }}:9200/_cluster/health?wait_for_status=green&timeout=60s"
         status_code: 200
         timeout: 90
-      register: es_health
-      until: es_health.status == 200
+      register: os_health
+      until: os_health.status == 200
       retries: 10
       delay: 10
       changed_when: false
 
+    # --- Server-side ingest resources (bodies verbatim from the ES 9 stack) ----
     - name: Deploy ILM policy (14d hot, then delete)
       ansible.builtin.uri:
         url: "http://{{ es_ip }}:9200/_ilm/policy/llm-logs-14d"
@@ -498,7 +542,7 @@
         body: "{{ nginx_index_template | to_nice_json }}"
         status_code: 200
 
-    # ES 9 _simulate response shape: docs[0].doc._source (doc_out is gone).
+    # _simulate response shape: docs[0].doc._source — same as ES 9.
     - name: Sanity-check pipeline against a real slot log line
       ansible.builtin.uri:
         url: "http://{{ es_ip }}:9200/_ingest/pipeline/llama-logs/_simulate"
@@ -513,113 +557,149 @@
         or pipeline_sim.json.docs[0].doc._source.get('prompt_tokens') != 5048
       changed_when: false
 
-    # --- Kibana ----------------------------------------------------------------
-    # Kibana 9 removed server.encryptionKey (the key is generated and managed
-    # by Kibana itself in its data dir); the old line is stripped if present.
-    - name: Remove legacy server.encryptionKey (removed in Kibana 9)
-      ansible.builtin.lineinfile:
-        path: /etc/kibana/kibana.yml
-        regexp: '^server\.encryptionKey:'
-        state: absent
-
-    - name: Remove legacy managed block (kibana.yml)
-      ansible.builtin.shell: |
-        python3 - <<'EOF'
-        import re
-        p = "/etc/kibana/kibana.yml"
-        s = open(p).read()
-        s2 = re.sub(r"# BEGIN ANSIBLE MANAGED BLOCK: elk\n.*?# END ANSIBLE MANAGED BLOCK: elk\n?", "", s, flags=re.S)
-        if s2 != s:
-            open(p, "w").write(s2)
-            print("removed")
-        EOF
-      register: legacy_kb_block
-      changed_when: "'removed' in legacy_kb_block.stdout"
-      failed_when: false
-
-    - name: Configure Kibana
-      ansible.builtin.lineinfile:
-        path: /etc/kibana/kibana.yml
+    # --- OpenSearch Dashboards --------------------------------------------------
+    # Config is written whole (fresh install). No credentials needed —
+    # server-side security is disabled.
+    - name: Write /etc/opensearch-dashboards/opensearch_dashboards.yml
+      ansible.builtin.copy:
+        dest: /etc/opensearch-dashboards/opensearch_dashboards.yml
         owner: root
-        group: kibana
+        group: opensearch-dashboards
         mode: "0644"
-        line: "{{ item }}"
-        regexp: "^[\\s#]*{{ item.split(':')[0] | trim | regex_escape }}:"
-      loop:
-        - 'server.port: 5601'
-        - 'server.host: "0.0.0.0"'
-        - 'elasticsearch.hosts: ["http://{{ es_ip }}:9200"]'
+        content: |
+          server.port: 5601
+          server.host: "0.0.0.0"
+          opensearch.hosts:
+            - "http://{{ es_ip }}:9200"
 
-    - name: Start and enable Kibana
+    - name: Start and enable OpenSearch Dashboards
       ansible.builtin.systemd:
-        name: kibana
+        name: opensearch-dashboards
         state: started
         enabled: true
 
-    - name: Wait for Kibana to answer
+    - name: Wait for OpenSearch Dashboards to answer
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 5601
         timeout: 300
 
-    - name: Wait for Kibana status API
+    - name: Wait for OpenSearch Dashboards status API
       ansible.builtin.uri:
         url: "http://{{ es_ip }}:5601/api/status"
         status_code: 200
-      register: kibana_status
-      until: kibana_status.status == 200
+      register: ods_status
+      until: ods_status.status == 200
       retries: 10
       delay: 10
       changed_when: false
 
-    # Kibana 9 content build. The saved-object `_import` API no longer
-    # accepts JSON (415) and the `visualization` type is vestigial — charts
-    # are Lens objects, so the content is driven through the as-code REST
-    # APIs (verified against 9.5.2):
-    #   1. data view  -> POST /api/saved_objects/index-pattern/<id>
-    #      (saved-object type "index-pattern"; the as-code POST /api/data_views
-    #      route is tech-preview-gated and not available)
-    #   2. 4 lens charts -> POST /api/visualizations (body has no id/version;
-    #      filters use {"type":"condition","condition":{field,operator,value}})
-    #   3. dashboard  -> POST /api/saved_objects/dashboard/<id> (panels +
-    #      references to the fresh lens ids)
-    # build_kibana_content.py is idempotent: it recreates the lenses by
-    # exact title, then rewrites the dashboard — so this reports changed on
-    # every run by design.
-    - name: Create Kibana content directory
+    # ODS creates its own system indices on first start (after the first
+    # zero-replica pass) — run the pass again so the cluster ends green.
+    - name: Zero replicas on all indices (after Dashboards system indices)
+      ansible.builtin.shell: |
+        for idx in $(curl -s "http://{{ es_ip }}:9200/_cat/indices?expand_wildcards=all&format=json&h=index" | python3 -c "import json,sys; [print(i['index']) for i in json.load(sys.stdin)]"); do
+          enc=$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$idx")
+          curl -s -X PUT "http://{{ es_ip }}:9200/${enc}/_settings" -H "Content-Type: application/json" -d '{"index.number_of_replicas":0}' > /dev/null
+        done
+      changed_when: false
+
+    - name: Wait for cluster health (post Dashboards)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_cluster/health?wait_for_status=green&timeout=60s"
+        status_code: 200
+        timeout: 90
+      register: os_health_final
+      until: os_health_final.status == 200
+      retries: 10
+      delay: 10
+      changed_when: false
+
+    # --- Dashboard content ---------------------------------------------------------
+    # Classic saved objects (data views, TSVB line/area charts, dashboards)
+    # imported via the stable NDJSON import endpoint with overwrite=true —
+    # re-running the play replaces the objects in place, so this is
+    # idempotent. The .ndjson files are generated from dashboards/*.json by
+    # generate_ods_objects.py (run locally, committed).
+    - name: Create Dashboards content directory
       ansible.builtin.file:
-        path: /usr/local/share/kibana-llm-content
+        path: /usr/local/share/ods-llm-content
         state: directory
         mode: "0755"
 
-    - name: Deploy Kibana content definitions and build script
+    - name: Deploy Dashboards NDJSON definitions
       ansible.builtin.copy:
         src: "dashboards/{{ item }}"
-        dest: "/usr/local/share/kibana-llm-content/{{ item }}"
+        dest: "/usr/local/share/ods-llm-content/{{ item }}"
         mode: "0644"
       loop:
-        - llm-lenses.json
-        - llm-dashboard.json
-        - nginx-lenses.json
-        - nginx-dashboard.json
-        - build_kibana_content.py
+        - llm-dashboards.ndjson
+        - nginx-dashboards.ndjson
 
-    - name: Build LLM Observability data view, charts and dashboard
+    - name: Import LLM Observability objects (data view, charts, dashboard)
       ansible.builtin.command:
-        cmd: python3 /usr/local/share/kibana-llm-content/build_kibana_content.py http://127.0.0.1:5601 /usr/local/share/kibana-llm-content
-      register: kibana_content
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - -F "file=@/usr/local/share/ods-llm-content/llm-dashboards.ndjson"
+          - -H "kbn-xsrf: true"
+          - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
+      register: llm_import
       changed_when: true
 
-    - name: Show Kibana content build result
-      ansible.builtin.debug:
-        var: kibana_content.stdout_lines
-
-    - name: Build NGINX Proxy Analytics data view, charts and dashboard
+    - name: Assert all LLM objects imported without failure
       ansible.builtin.command:
-        cmd: python3 /usr/local/share/kibana-llm-content/build_kibana_content.py http://127.0.0.1:5601 /usr/local/share/kibana-llm-content nginx-lenses.json nginx-dashboard.json
-      register: kibana_nginx_content
+        argv:
+          - python3
+          - -c
+          - >-
+            import json, sys;
+            r = json.loads(sys.argv[1]);
+            failed = r.get("failuresCount", r.get("failed", len(r.get("failures", []))));
+            ok = r.get("successCount", r.get("succeeded", 0));
+            print("imported ok=%s failed=%s" % (ok, failed));
+            sys.exit(1 if failed else 0)
+          - "{{ llm_import.stdout }}"
+      changed_when: false
+
+    - name: Import NGINX Proxy Analytics objects (data view, charts, dashboard)
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - -F "file=@/usr/local/share/ods-llm-content/nginx-dashboards.ndjson"
+          - -H "kbn-xsrf: true"
+          - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
+      register: nginx_import
       changed_when: true
 
-    - name: Show NGINX Kibana content build result
-      ansible.builtin.debug:
-        var: kibana_nginx_content.stdout_lines
+    - name: Assert all NGINX objects imported without failure
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - >-
+            import json, sys;
+            r = json.loads(sys.argv[1]);
+            failed = r.get("failuresCount", r.get("failed", len(r.get("failures", []))));
+            ok = r.get("successCount", r.get("succeeded", 0));
+            print("imported ok=%s failed=%s" % (ok, failed));
+            sys.exit(1 if failed else 0)
+          - "{{ nginx_import.stdout }}"
+      changed_when: false
+
+    # End-to-end check that the import actually landed both dashboards.
+    - name: Verify both dashboards exist
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/saved_objects/_find?per_page=100&type=dashboard"
+        status_code: 200
+      register: dashboards_found
+      changed_when: false
+
+    - name: Assert LLM and NGINX dashboards are present
+      ansible.builtin.assert:
+        that:
+          - (dashboards_found.json.data | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics"]) | list | length) == 2
+        fail_msg: Dashboards missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.

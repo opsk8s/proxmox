@@ -1,0 +1,44 @@
+[
+  {
+    "viz_id": "nginx-request-rate",
+    "title": "Request rate",
+    "description": "all proxied requests per time bucket (json_analytics access log)",
+    "chart": "area",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "requests" }
+    ]
+  },
+  {
+    "viz_id": "nginx-response-time",
+    "title": "Response time (s)",
+    "description": "avg/max nginx request_time across all virtual hosts",
+    "chart": "line",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "avg s" },
+      { "type": "max", "field": "request_time", "label": "max s" }
+    ]
+  },
+  {
+    "viz_id": "nginx-upstream-time",
+    "title": "Upstream response time (s)",
+    "description": "avg upstream_response_time (time spent in the backend service)",
+    "chart": "line",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "upstream_response_time", "label": "avg s" },
+      { "type": "max", "field": "upstream_response_time", "label": "max s" }
+    ]
+  },
+  {
+    "viz_id": "nginx-bytes-sent",
+    "title": "Bytes sent",
+    "description": "total body_bytes_sent per time bucket (bytes)",
+    "chart": "area",
+    "filters": [],
+    "metrics": [
+      { "type": "sum", "field": "body_bytes_sent", "label": "bytes" }
+    ]
+  }
+]

@@ -1,0 +1,42 @@
+[
+  {
+    "viz_id": "llm-gen-throughput",
+    "title": "Generation throughput (tokens/s)",
+    "description": "avg/max generation t/s from slot progress lines",
+    "chart": "line",
+    "filters": [
+      { "field": "llama.event.keyword", "value": "slot_progress" },
+      { "field": "source.keyword", "value": "llama" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "tg_tps", "label": "avg t/s" },
+      { "type": "max", "field": "tg_tps", "label": "max t/s" }
+    ]
+  },
+  {
+    "viz_id": "llm-completions",
+    "title": "Completed generations",
+    "description": "one total_time event per finished slot generation",
+    "chart": "area",
+    "filters": [
+      { "field": "llama.event.keyword", "value": "total_time" },
+      { "field": "source.keyword", "value": "llama" }
+    ],
+    "metrics": [
+      { "type": "count", "label": "completions" }
+    ]
+  },
+  {
+    "viz_id": "llm-prompt-processing",
+    "title": "Prompt processing (tokens/s)",
+    "description": "prompt prefill throughput from prompt-progress samples",
+    "chart": "line",
+    "filters": [
+      { "field": "llama.event.keyword", "value": "prompt_progress" },
+      { "field": "source.keyword", "value": "llama" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "prompt_proc_tps", "label": "avg prompt t/s" }
+    ]
+  }
+]
