@@ -25,7 +25,7 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
+        "w": 4,
         "x": 0,
         "y": 0
       },
@@ -76,8 +76,8 @@
       },
       "gridPos": {
         "h": 4,
-        "w": 6,
-        "x": 6,
+        "w": 4,
+        "x": 4,
         "y": 0
       },
       "fieldConfig": {
@@ -113,6 +113,1289 @@
       "targets": [
         {
           "expr": "up{job=\"nodes\", instance_name=\"nginx\"}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Requests (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 8,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Avg request time (s)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "mean"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "avg",
+              "field": "request_time"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Errors 4xx/5xx (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 16,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "status:[400 TO 599]",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Bytes out (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 20,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "sum",
+              "field": "body_bytes_sent"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "2xx (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "status:[200 TO 299]",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "3xx (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "status:[300 TO 399]",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "4xx (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "orange",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "status:[400 TO 499]",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "5xx (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "status:[500 TO 599]",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Request rate by virtual host",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 35,
+            "lineWidth": 1,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "transformations": [
+        {
+          "id": "convertFieldType",
+          "options": {
+            "conversions": [
+              {
+                "destinationType": "number",
+                "targetField": "@timestamp"
+              },
+              {
+                "destinationType": "time",
+                "targetField": "@timestamp"
+              }
+            ]
+          }
+        }
+      ],
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            },
+            {
+              "id": "3",
+              "type": "terms",
+              "field": "host.keyword",
+              "settings": {
+                "size": "8",
+                "order": "desc",
+                "orderBy": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Request time (s)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "avg",
+              "field": "request_time"
+            },
+            {
+              "id": "2",
+              "type": "max",
+              "field": "request_time"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "3",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Upstream response time (s)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "fillOpacity": 10,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "avg",
+              "field": "upstream_response_time"
+            },
+            {
+              "id": "2",
+              "type": "max",
+              "field": "upstream_response_time"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "3",
+              "type": "date_histogram",
+              "field": "@timestamp",
+              "settings": {
+                "interval": "auto",
+                "min_doc_count": "0",
+                "trimEdges": "0"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "barchart",
+      "title": "Requests by virtual host (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "groupWidth": 50,
+        "barWidth": 0.97,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "terms",
+              "field": "host.keyword",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "Top request paths (range)",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 24
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "fillOpacity": 80
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "groupWidth": 50,
+        "barWidth": 0.97,
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "count"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "terms",
+              "field": "request.keyword",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 16,
+      "type": "table",
+      "title": "Slowest request paths",
+      "datasource": {
+        "type": "grafana-opensearch-datasource",
+        "uid": "opensearch"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Max"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Max (s)"
+              },
+              {
+                "id": "unit",
+                "value": "s"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "auto"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "request.keyword"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Request"
+              },
+              {
+                "id": "custom.width",
+                "value": 400
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "showTypeIcons": false,
+        "footer": {
+          "show": false,
+          "reducer": [
+            "sum"
+          ],
+          "countRows": false
+        },
+        "sortBy": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "timeField": "@timestamp",
+          "query": "",
+          "metrics": [
+            {
+              "id": "1",
+              "type": "max",
+              "field": "request_time"
+            }
+          ],
+          "bucketAggs": [
+            {
+              "id": "2",
+              "type": "terms",
+              "field": "request.keyword",
+              "settings": {
+                "size": "10",
+                "order": "desc",
+                "orderBy": "1"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "CPU \u2014 nginx VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 - avg(rate(node_cpu_seconds_total{instance_name=\"nginx\", mode=\"idle\"}[$__rate_interval])) * 100",
+          "legendFormat": "CPU",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Memory used \u2014 nginx VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{instance_name=\"nginx\"} / node_memory_MemTotal_bytes{instance_name=\"nginx\"})",
+          "legendFormat": "used",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Load \u2014 nginx VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "node_load1{instance_name=\"nginx\"}",
+          "legendFormat": "load1",
+          "refId": "A"
+        },
+        {
+          "expr": "node_load5{instance_name=\"nginx\"}",
+          "legendFormat": "load5",
+          "refId": "B"
+        },
+        {
+          "expr": "node_load15{instance_name=\"nginx\"}",
+          "legendFormat": "load15",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "Network I/O \u2014 nginx VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(node_network_receive_bytes_total{instance_name=\"nginx\", device!=\"lo\"}[$__rate_interval])",
+          "legendFormat": "rx {{device}}",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(node_network_transmit_bytes_total{instance_name=\"nginx\", device!=\"lo\"}[$__rate_interval])",
+          "legendFormat": "tx {{device}}",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Disk used \u2014 nginx VM (/)",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 48
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "custom": {
+            "fillOpacity": 20,
+            "lineWidth": 2,
+            "drawStyle": "line",
+            "showPoints": "never",
+            "lineInterpolation": "linear",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      },
+      "targets": [
+        {
+          "expr": "100 * (1 - node_filesystem_avail_bytes{fstype!=\"tmpfs\", mountpoint=\"/\", instance_name=\"nginx\"} / node_filesystem_size_bytes{fstype!=\"tmpfs\", mountpoint=\"/\", instance_name=\"nginx\"})",
+          "legendFormat": "used",
           "refId": "A"
         }
       ]

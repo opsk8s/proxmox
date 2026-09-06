@@ -134,16 +134,25 @@
           isDefault: true
           editable: true
 
-        # nginx-access-* indices (shipped by Filebeat on the nginx VM);
-        # the "Proxmox — NGINX Proxy" dashboard queries it with ES|QL
-        - name: Elasticsearch
-          uid: elasticsearch
-          type: elasticsearch
+        # nginx-access-* indices (shipped by Fluent Bit on the nginx VM);
+        # the "Proxmox — NGINX Proxy" dashboard queries them.
+        #
+        # MUST be the native OpenSearch datasource (grafana-opensearch-
+        # datasource, installed below): Grafana's elasticsearch datasource
+        # executes queries against OpenSearch but maps every response
+        # (aggregations and raw docs alike) to empty frames, and its health
+        # check still reports healthy — verified 2026-09-06 against
+        # Grafana 13.2.0 / OpenSearch 2.19.6.
+        - name: OpenSearch
+          uid: opensearch
+          type: grafana-opensearch-datasource
           access: proxy
           url: http://{{ elk_ip }}:9200
           database: nginx-access-*
           jsonData:
             timeField: "@timestamp"
+            flavor: opensearch
+            version: 2.19.0
           editable: true
 
     grafana_dashboard_provider: |
@@ -322,6 +331,36 @@
       notify: restart prometheus
 
     # --- Grafana provisioning -------------------------------------------------
+    # The OpenSearch datasource is NOT bundled with Grafana OSS — the
+    # provisioning file above references it, so it must be installed before
+    # Grafana (re)starts. Run as the grafana user: running grafana-cli as
+    # root creates /var/lib/grafana/plugins root-owned and grafana-server
+    # then cannot manage plugins.
+    - name: Check for the OpenSearch datasource plugin
+      ansible.builtin.stat:
+        path: /var/lib/grafana/plugins/grafana-opensearch-datasource
+      register: os_plugin_dir
+
+    - name: Install OpenSearch datasource plugin
+      ansible.builtin.shell: |
+        # cd is required: grafana cli stats its CWD at init and panics
+        # ("static.init" goroutine trace) when it is not readable by the
+        # grafana user — same trap as the reset-admin-password task above.
+        cd /usr/share/grafana && runuser -u grafana -- grafana cli --homepath /usr/share/grafana plugins install grafana-opensearch-datasource
+      args:
+        executable: /bin/bash
+      register: os_plugin_install
+      changed_when: true
+      when: not os_plugin_dir.stat.exists
+
+    # restart grafana so the freshly installed plugin is loaded before the
+    # datasource provisioning below is read on the next restart
+    - name: Restart Grafana to load the OpenSearch plugin
+      ansible.builtin.systemd:
+        name: grafana-server
+        state: restarted
+      when: not os_plugin_dir.stat.exists and os_plugin_install is changed
+
     - name: Deploy Grafana datasource provisioning
       ansible.builtin.copy:
         dest: /etc/grafana/provisioning/datasources/prometheus.yaml
