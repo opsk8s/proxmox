@@ -201,6 +201,15 @@
               proxy_set_header X-Forwarded-Proto $scheme;
               proxy_set_header Upgrade $http_upgrade;
               proxy_set_header Connection $connection_upgrade;
+              # Tracing: hand the upstream a stable per-request id and echo
+              # it (plus the serving instance) back in the response.
+              # request_id already links nginx-access-* to nginx-body-* via
+              # the same $request_id; X-Upstream exposes which llama-server
+              # instance (llm_pool round-robin) actually served the request,
+              # so it can be traced into llm-logs-* by that port.
+              proxy_set_header X-Request-Id $request_id;
+              add_header X-Request-Id $request_id always;
+              add_header X-Upstream $upstream_addr always;
               proxy_buffering off;
               # generations can run for minutes
               proxy_read_timeout 3600s;

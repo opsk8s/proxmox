@@ -85,6 +85,7 @@ elseif phase == "log" then
     remote_addr = ngx.var.remote_addr,
     method      = ngx.req.get_method(),
     uri         = ngx.var.uri,
+    upstream_addr = ngx.var.upstream_addr,
     status      = ngx.var.status,
     request_content_type  = ngx.var.http_content_type or "",
     response_content_type = ngx.var.sent_http_content_type or "",

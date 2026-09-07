@@ -9,6 +9,8 @@
     { "title": "Request rate", "x": 0, "y": 0, "w": 24, "h": 10 },
     { "title": "Response time (s)", "x": 0, "y": 10, "w": 12, "h": 10 },
     { "title": "Upstream response time (s)", "x": 12, "y": 10, "w": 12, "h": 10 },
-    { "title": "Bytes sent", "x": 0, "y": 20, "w": 24, "h": 10 }
+    { "title": "Bytes sent", "x": 0, "y": 20, "w": 24, "h": 10 },
+    { "title": "Requests per LLM instance", "x": 0, "y": 30, "w": 12, "h": 10 },
+    { "title": "Response time per LLM instance (s)", "x": 12, "y": 30, "w": 12, "h": 10 }
   ]
 }

@@ -37,23 +37,78 @@
           HTTP_Listen   127.0.0.1
           HTTP_Port     2020
 
+      # One explicit tail input per llama-server instance. A single wildcard
+      # input used to merge all four per-GPU streams into indistinguishable
+      # records; nginx access logs only name the upstream they hit
+      # (192.168.51.201:800N), so 'instance' is the join key that lets a
+      # request be traced to the exact llama-server that served it.
+      # The DB file is shared (offsets are keyed by path), so the existing
+      # offsets in fluent-bit.db are honored and nothing is re-backfilled.
       [INPUT]
           Name           tail
-          Tag            llama
-          Path           /home/llm/logs/llama_server_port_*.log
+          Tag            llama-8001
+          Path           /home/llm/logs/llama_server_port_8001.log
           Exclude_Path   *log.*
           Read_from_Head On
           DB             /var/lib/fluent-bit/fluent-bit.db
           Parser         raw_line
 
+      [INPUT]
+          Name           tail
+          Tag            llama-8002
+          Path           /home/llm/logs/llama_server_port_8002.log
+          Exclude_Path   *log.*
+          Read_from_Head On
+          DB             /var/lib/fluent-bit/fluent-bit.db
+          Parser         raw_line
+
+      [INPUT]
+          Name           tail
+          Tag            llama-8003
+          Path           /home/llm/logs/llama_server_port_8003.log
+          Exclude_Path   *log.*
+          Read_from_Head On
+          DB             /var/lib/fluent-bit/fluent-bit.db
+          Parser         raw_line
+
+      [INPUT]
+          Name           tail
+          Tag            llama-8004
+          Path           /home/llm/logs/llama_server_port_8004.log
+          Exclude_Path   *log.*
+          Read_from_Head On
+          DB             /var/lib/fluent-bit/fluent-bit.db
+          Parser         raw_line
+
+      # Per-instance identity on every record (modify applies the ops in
+      # order within one section, so the two Adds are fine).
       [FILTER]
           Name    modify
-          Match   llama
-          Set     source llama
+          Match   llama-8001
+          Add     source llama
+          Add     instance 8001
+
+      [FILTER]
+          Name    modify
+          Match   llama-8002
+          Add     source llama
+          Add     instance 8002
+
+      [FILTER]
+          Name    modify
+          Match   llama-8003
+          Add     source llama
+          Add     instance 8003
+
+      [FILTER]
+          Name    modify
+          Match   llama-8004
+          Add     source llama
+          Add     instance 8004
 
       [OUTPUT]
           Name               opensearch
-          Match              llama
+          Match              llama-*
           Host               {{ es_host }}
           Port               9200
           # strftime is applied per flush → llm-logs-YYYY.MM.DD, matching the

@@ -8,6 +8,8 @@
   "panels": [
     { "title": "Generation throughput (tokens/s)", "x": 0, "y": 0, "w": 24, "h": 10 },
     { "title": "Completed generations", "x": 0, "y": 10, "w": 12, "h": 10 },
-    { "title": "Prompt processing (tokens/s)", "x": 12, "y": 10, "w": 12, "h": 10 }
+    { "title": "Prompt processing (tokens/s)", "x": 12, "y": 10, "w": 12, "h": 10 },
+    { "title": "Generation throughput per instance (t/s)", "x": 0, "y": 20, "w": 12, "h": 10 },
+    { "title": "Completed generations per instance", "x": 12, "y": 20, "w": 12, "h": 10 }
   ]
 }

@@ -7,10 +7,19 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
+.PHONY: deploy-all deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
+
+# Deploy every service in dependency order, sequentially, stopping on the
+# first failure: dns (foundation) -> elk (hard prereq: both deploy-nginx and
+# deploy-llm-observability wait_for es:9200) -> independent backends ->
+# consumers (open-webui, nginx) -> observability (monitoring, exporters).
+# Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
+deploy-all: deploy-dns deploy-elk deploy-postgres deploy-llm deploy-jenkins \
+	deploy-jenkins-agent deploy-open-webui deploy-nginx \
+	deploy-llm-observability deploy-monitoring deploy-exporters
 
 deploy-llm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/ansible.yml \

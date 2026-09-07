@@ -54,7 +54,23 @@ def _search_source(data_view_id: str, filters: list) -> str:
     )
 
 
-def data_view_object(dash: dict) -> dict:
+def data_views_of(dash: dict) -> list:
+    # A dashboard may span several data views (the Request Flow dashboard
+    # joins nginx access + nginx body + llama logs). Default: the single
+    # data view defined on the dashboard itself.
+    dvs = dash.get("data_views")
+    if dvs is None:
+        dvs = [
+            {
+                "id": dash["data_view_id"],
+                "title": dash["data_view_title"],
+                "pattern": dash["data_view_pattern"],
+            }
+        ]
+    return dvs
+
+
+def data_view_object(dv: dict) -> dict:
     # title MUST be the index pattern: ODS matches the pattern against
     # indices via attributes.title (attributes.name is only a display
     # label). Getting this inverted yields Discover/dashboard errors
@@ -63,14 +79,14 @@ def data_view_object(dash: dict) -> dict:
     # the field list from the live index on first open of the data view.
     return {
         "attributes": {
-            "title": dash["data_view_pattern"],
-            "name": dash["data_view_title"],
+            "title": dv["pattern"],
+            "name": dv["title"],
             "timeFieldName": "@timestamp",
             "fields": "[]",
             "fieldFormats": "{}",
         },
         "coreMigrationVersion": CORE_MIGRATION,
-        "id": dash["data_view_id"],
+        "id": dv["id"],
         "references": [],
         "type": "index-pattern",
     }
@@ -105,6 +121,27 @@ def _vislib_vis_state(chart: dict) -> dict:
                 "type": m["type"],
                 "schema": "metric",
                 "params": params,
+            }
+        )
+    # Optional category splits (e.g. per upstream instance / per llama
+    # instance) → one series per bucket, vislib split_group schema.
+    splits = chart.get("splits", [])
+    for j, s in enumerate(splits, start=1):
+        aggs.append(
+            {
+                "id": f"s{j}",
+                "enabled": True,
+                "type": "split_group",
+                "schema": "group",
+                "params": {
+                    "id": f"s{j}",
+                    "split_mode": "aggregation",
+                    "field": s["field"],
+                    "size": 10,
+                    "order": "desc",
+                    "orderBy": "2",
+                    "customLabel": "",
+                },
             }
         )
     return {
@@ -144,6 +181,7 @@ def _vislib_vis_state(chart: dict) -> dict:
                     "type": chart_type,
                     "mode": "normal",
                     "data": {"label": m["label"], "id": str(i)},
+                    **({"split_id": [f"s{j}" for j in range(1, len(splits) + 1)]} if splits else {}),
                     "valueAxis": "ValueAxis-1",
                     "drawLinesBetweenPoints": True,
                     "showCircles": True,
@@ -161,6 +199,9 @@ def _vislib_vis_state(chart: dict) -> dict:
 
 
 def visualization_object(dash: dict, chart: dict) -> dict:
+    # A chart may target a data view other than the dashboard's default
+    # (multi-data-view dashboards like Request Flow).
+    dv_id = chart.get("data_view") or dash.get("data_view_id")
     return {
         "attributes": {
             "title": chart["title"],
@@ -168,14 +209,14 @@ def visualization_object(dash: dict, chart: dict) -> dict:
             "visState": json.dumps(_vislib_vis_state(chart), separators=(",", ":")),
             "uiStateJSON": "{}",
             "kibanaSavedObjectMeta": {
-                "searchSourceJSON": _search_source(dash["data_view_id"], chart.get("filters", [])),
+                "searchSourceJSON": _search_source(dv_id, chart.get("filters", [])),
             },
         },
         "coreMigrationVersion": CORE_MIGRATION,
         "id": chart["viz_id"],
         "references": [
             {
-                "id": dash["data_view_id"],
+                "id": dv_id,
                 "name": "kibanaSavedObjectMeta.searchSourceJSON.index",
                 "type": "index-pattern",
             }
@@ -223,9 +264,9 @@ def dashboard_object(dash: dict, charts: list) -> dict:
 
 
 def build_stack(dash: dict, charts: list) -> list:
-    # Topological order: data view first, then charts, then dashboard.
+    # Topological order: data views first, then charts, then dashboard.
     return [
-        data_view_object(dash),
+        *(data_view_object(dv) for dv in data_views_of(dash)),
         *(visualization_object(dash, c) for c in charts),
         dashboard_object(dash, charts),
     ]
@@ -243,6 +284,7 @@ def main() -> None:
     for dash_name, charts_name, out_name in [
         ("llm-dashboard.json", "llm-charts.json", "llm-dashboards.ndjson"),
         ("nginx-dashboard.json", "nginx-charts.json", "nginx-dashboards.ndjson"),
+        ("request-flow-dashboard.json", "request-flow-charts.json", "request-flow-dashboards.ndjson"),
     ]:
         dash = json.loads((HERE / dash_name).read_text(encoding="utf-8"))
         charts = json.loads((HERE / charts_name).read_text(encoding="utf-8"))

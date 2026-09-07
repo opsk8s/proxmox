@@ -38,5 +38,37 @@
     "metrics": [
       { "type": "avg", "field": "prompt_proc_tps", "label": "avg prompt t/s" }
     ]
+  },
+  {
+    "viz_id": "llm-throughput-instance",
+    "title": "Generation throughput per instance (t/s)",
+    "description": "avg generation t/s from slot progress lines, split by llama-server instance (upstream port)",
+    "chart": "line",
+    "filters": [
+      { "field": "llama.event.keyword", "value": "slot_progress" },
+      { "field": "source.keyword", "value": "llama" }
+    ],
+    "splits": [
+      { "field": "instance" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "tg_tps", "label": "avg t/s" }
+    ]
+  },
+  {
+    "viz_id": "llm-completions-instance",
+    "title": "Completed generations per instance",
+    "description": "one total_time event per finished generation, split by llama-server instance (upstream port)",
+    "chart": "area",
+    "filters": [
+      { "field": "llama.event.keyword", "value": "total_time" },
+      { "field": "source.keyword", "value": "llama" }
+    ],
+    "splits": [
+      { "field": "instance" }
+    ],
+    "metrics": [
+      { "type": "count", "label": "completions" }
+    ]
   }
 ]

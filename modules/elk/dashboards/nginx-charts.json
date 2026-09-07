@@ -40,5 +40,36 @@
     "metrics": [
       { "type": "sum", "field": "body_bytes_sent", "label": "bytes" }
     ]
+  },
+  {
+    "viz_id": "nginx-request-rate-instance",
+    "title": "Requests per LLM instance",
+    "description": "requests to app.llm.lan per upstream instance (llm_pool round-robin; upstream_addr ip:port)",
+    "chart": "area",
+    "filters": [
+      { "field": "host.keyword", "value": "app.llm.lan" }
+    ],
+    "splits": [
+      { "field": "upstream_addr.keyword" }
+    ],
+    "metrics": [
+      { "type": "count", "label": "requests" }
+    ]
+  },
+  {
+    "viz_id": "nginx-response-time-instance",
+    "title": "Response time per LLM instance (s)",
+    "description": "avg/max nginx request_time per upstream instance serving app.llm.lan",
+    "chart": "line",
+    "filters": [
+      { "field": "host.keyword", "value": "app.llm.lan" }
+    ],
+    "splits": [
+      { "field": "upstream_addr.keyword" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "avg s" },
+      { "type": "max", "field": "request_time", "label": "max s" }
+    ]
   }
 ]

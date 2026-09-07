@@ -82,7 +82,14 @@
           # guarded and no-op on non-matching lines
           index.default_pipeline: llama-logs
         mappings:
-          properties: {}
+          # 'instance' is the llama-server port (8001-8004), added by the
+          # per-port Fluent Bit filters on the LLM VM (modules/llm/
+          # observability.yml). It is the join key with nginx-access
+          # upstream_addr (the llm_pool round-robin target). Records
+          # shipped before that change carry no instance.
+          properties:
+            instance:
+              type: keyword
 
     # Indices: Fluent Bit on the nginx VM ships the JSON access log into
     # nginx-access-YYYY.MM.dd and the captured request/response bodies of the
@@ -163,6 +170,10 @@
             request_id:
               type: keyword
             method:
+              type: keyword
+            # which llama-server instance (ip:port) served the request —
+            # recorded by body-capture.lua, matches nginx-access upstream_addr
+            upstream_addr:
               type: keyword
             host:
               type: text
@@ -804,6 +815,7 @@
       loop:
         - llm-dashboards.ndjson
         - nginx-dashboards.ndjson
+        - request-flow-dashboards.ndjson
 
     - name: Import LLM Observability objects (data view, charts, dashboard)
       ansible.builtin.command:
@@ -863,16 +875,45 @@
           - "{{ nginx_import.stdout }}"
       changed_when: false
 
-    # End-to-end check that the import actually landed both dashboards.
-    - name: Verify both dashboards exist
+    - name: Import Request Flow (LLM) objects (data views, charts, dashboard)
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - -F
+          - "file=@/usr/local/share/ods-llm-content/request-flow-dashboards.ndjson"
+          - -H
+          - "osd-xsrf: true"
+          - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
+      register: flow_import
+      changed_when: true
+
+    - name: Assert all Request Flow objects imported without failure
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - >-
+            import json, sys;
+            r = json.loads(sys.argv[1]);
+            failed = r.get("failuresCount", r.get("failed", len(r.get("failures", []))));
+            ok = r.get("successCount", r.get("succeeded", 0));
+            print("imported ok=%s failed=%s" % (ok, failed));
+            sys.exit(1 if failed else 0)
+          - "{{ flow_import.stdout }}"
+      changed_when: false
+
+    # End-to-end check that the import actually landed all dashboards.
+    - name: Verify all dashboards exist
       ansible.builtin.uri:
         url: "http://127.0.0.1:5601/api/saved_objects/_find?per_page=100&type=dashboard"
         status_code: 200
       register: dashboards_found
       changed_when: false
 
-    - name: Assert LLM and NGINX dashboards are present
+    - name: Assert LLM, NGINX and Request Flow dashboards are present
       ansible.builtin.assert:
         that:
-          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics"]) | list | length) == 2
+          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics", "request-flow-llm"]) | list | length) == 3
         fail_msg: Dashboards missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.
