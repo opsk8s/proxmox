@@ -504,7 +504,65 @@
                 keyword:
                   type: keyword
                   ignore_above: 512
+            # Decoded response payload (see body-capture.lua): the
+            # completion JSON object for stream=false, or the SSE stream
+            # reconstructed into a chat.completion object for stream=true
+            # (content/reasoning/tool_calls deltas accumulated)
             response_body:
+              type: object
+              properties:
+                object:
+                  type: keyword
+                id:
+                  type: keyword
+                created:
+                  type: long
+                  ignore_malformed: true
+                model:
+                  type: keyword
+                system_fingerprint:
+                  type: keyword
+                choices:
+                  type: object
+                  properties:
+                    index:
+                      type: integer
+                    finish_reason:
+                      type: keyword
+                    message:
+                      type: object
+                      properties:
+                        role:
+                          type: keyword
+                        content:
+                          type: text
+                        reasoning_content:
+                          type: text
+                        tool_calls:
+                          type: object
+                          properties:
+                            id:
+                              type: keyword
+                            type:
+                              type: keyword
+                            function:
+                              type: object
+                              properties:
+                                name:
+                                  type: keyword
+                                arguments:
+                                  type: text
+                usage:
+                  type: object
+                  properties:
+                    prompt_tokens:
+                      type: long
+                    completion_tokens:
+                      type: long
+                    total_tokens:
+                      type: long
+            # Non-parseable response bodies land here instead
+            response_body_raw:
               type: text
             response_body_bytes:
               type: long

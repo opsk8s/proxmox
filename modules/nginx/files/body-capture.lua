@@ -9,12 +9,13 @@
 -- body document joins to its access record on request_id. The request is
 -- parsed as an OpenAI-compatible chat-completion payload; the response as
 -- either an SSE stream of chat.completion.chunk events (stream=true) or a
--- single completion JSON object (stream=false). The decoded request payload
--- is embedded in its document as an object (request_body) with
--- messages[].content part-arrays joined to text and shape-varying fields
--- (tool parameter schemas, metadata) stored as their JSON string, so
--- messages, roles and tool definitions are individually queryable; the
--- response document keeps the raw stream next to its parsed fields.
+-- single completion JSON object (stream=false). Both decoded payloads are
+-- embedded in their documents as objects (request_body / response_body):
+-- the request with messages[].content part-arrays joined to text and
+-- shape-varying fields (tool parameter schemas, metadata) stored as their
+-- JSON string, the response reconstructed into the chat.completion shape
+-- (SSE content/reasoning/tool-call deltas accumulated), so messages,
+-- roles, tool definitions and the final answer are individually queryable.
 --
 -- Every fallible step is pcall-guarded: failures only reach the nginx
 -- error log, never the proxied request.
@@ -194,7 +195,9 @@ end
 -- comment line) or a single completion JSON object (stream=false, or a JSON
 -- error body). Streaming content/reasoning deltas are accumulated in arrays
 -- and joined ONCE -- per-chunk string concatenation would be O(n^2) on
--- multi-MB streams.
+-- multi-MB streams. On success the decoded payload is returned as
+-- response_body: the completion object as-is, or the stream reconstructed
+-- into a chat.completion object (tool call deltas merged by delta index).
 local function parse_response(body)
   local out = { stream = false }
   if body == "" then
@@ -206,6 +209,9 @@ local function parse_response(body)
     out.stream = true
     local content_parts = {}
     local reasoning_parts = {}
+    -- tool call deltas keyed by their delta index; a call may arrive split
+    -- across chunks (name/arguments appended per delta)
+    local tc_slots, tc_max = {}, 0
     local chunk_count = 0
     for line in (body .. "\n"):gmatch("(.-)\n") do
       if line:sub(1, 6) == "data: " then
@@ -232,6 +238,30 @@ local function parse_response(body)
                 if type(d.reasoning_content) == "string" then
                   reasoning_parts[#reasoning_parts + 1] = d.reasoning_content
                 end
+                if type(d.tool_calls) == "table" then
+                  for _, tc in ipairs(d.tool_calls) do
+                    if type(tc) == "table" then
+                      local i = (type(tc.index) == "number" and tc.index or 0) + 1
+                      local slot = tc_slots[i]
+                      if not slot then
+                        slot = { fn_name = "", fn_args = "" }
+                        tc_slots[i] = slot
+                        if i > tc_max then tc_max = i end
+                      end
+                      if type(tc.id) == "string" then slot.id = tc.id end
+                      if type(tc.type) == "string" then slot.type = tc.type end
+                      local fn = tc["function"]
+                      if type(fn) == "table" then
+                        if type(fn.name) == "string" then
+                          slot.fn_name = slot.fn_name .. fn.name
+                        end
+                        if type(fn.arguments) == "string" then
+                          slot.fn_args = slot.fn_args .. fn.arguments
+                        end
+                      end
+                    end
+                  end
+                end
               end
               if ch.finish_reason then
                 out.finish_reason = ch.finish_reason -- last non-null wins
@@ -242,14 +272,51 @@ local function parse_response(body)
       end
     end
     out.chunk_count = chunk_count
-    if #content_parts > 0 then
-      out.content = table.concat(content_parts)
-    end
-    if #reasoning_parts > 0 then
-      out.reasoning_content = table.concat(reasoning_parts)
-    end
     if chunk_count == 0 then
       out.parse_error = true
+      return out
+    end
+    local content = #content_parts > 0 and table.concat(content_parts) or nil
+    local reasoning = #reasoning_parts > 0 and table.concat(reasoning_parts) or nil
+    out.content = content
+    out.reasoning_content = reasoning
+    local tool_calls = {}
+    for i = 1, tc_max do
+      local slot = tc_slots[i]
+      if slot and (slot.id or slot.type or slot.fn_name ~= "" or slot.fn_args ~= "") then
+        local tc = {}
+        if slot.id then tc.id = slot.id end
+        if slot.type then tc.type = slot.type end
+        if slot.fn_name ~= "" or slot.fn_args ~= "" then
+          tc["function"] = {}
+          if slot.fn_name ~= "" then tc["function"].name = slot.fn_name end
+          if slot.fn_args ~= "" then tc["function"].arguments = slot.fn_args end
+        end
+        tool_calls[#tool_calls + 1] = tc
+      end
+    end
+    local message = { role = "assistant" }
+    if content then message.content = content end
+    if reasoning then message.reasoning_content = reasoning end
+    if #tool_calls > 0 then message.tool_calls = tool_calls end
+    -- Reconstruct the stream into the standard chat.completion shape so
+    -- the indexed document carries the decoded payload, not the raw SSE
+    out.response_body = {
+      object = "chat.completion",
+      id = out.completion_id,
+      created = out.created,
+      model = out.model,
+      system_fingerprint = out.system_fingerprint,
+      choices = {
+        { index = 0, message = message, finish_reason = out.finish_reason },
+      },
+    }
+    if out.usage_prompt_tokens or out.usage_completion_tokens or out.usage_total_tokens then
+      out.response_body.usage = {
+        prompt_tokens = out.usage_prompt_tokens,
+        completion_tokens = out.usage_completion_tokens,
+        total_tokens = out.usage_total_tokens,
+      }
     end
     return out
   end
@@ -274,6 +341,7 @@ local function parse_response(body)
     if type(o.error) == "table" and type(o.error.message) == "string" then
       out.error_message = o.error.message
     end
+    out.response_body = o
   else
     out.parse_error = true
   end
@@ -347,7 +415,10 @@ elseif phase == "log" then
     end
     resp.request_content_type = ngx.var.http_content_type or ""
     resp.response_content_type = ngx.var.sent_http_content_type or ""
-    resp.response_body = resp_raw
+    if resp.parse_error then
+      -- not JSON/SSE: the object is absent, keep the raw stream searchable
+      resp.response_body_raw = resp_raw
+    end
     resp.response_body_bytes = c.size
     resp.truncated = c.overflow
     resp.source = "nginx"
