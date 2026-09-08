@@ -14,7 +14,9 @@
     # OpenAI-compatible endpoint: llama-server on GPU0 of the LLM VM. The 4
     # llama.cpp servers run directly on 8001-8004 (one per GPU, same model,
     # see modules/llm/ansible.yml); load balancing is left to the caller.
-    llm_api_base_url: "http://app.llm.lan/v1"
+    # https: the gateway serves .lan names over TLS (modules/nginx LAN CA)
+    # and the browser blocks the http endpoint from an https page.
+    llm_api_base_url: "https://app.llm.lan/v1"
 
   tasks:
     - name: Wait for SSH (first boot)

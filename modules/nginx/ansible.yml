@@ -62,11 +62,93 @@
           ''      close;
       }
 
+    # --- LAN TLS (local CA for the .lan names) ----------------------------------
+    # .lan is private DNS (modules/dns), so no public CA can issue for it. A
+    # 10-year CA root lives in /etc/lan-ca and is trusted once per client
+    # device (Mac keychain, iOS profile, ...). It signs a single 730d leaf
+    # covering every server_name in this play; lan-cert-renew.sh regenerates
+    # it when it is missing, the SAN list drifts, or it expires within 60
+    # days — a daily timer runs the same script unattended.
+    lan_ca_dir: /etc/lan-ca
+    lan_cert_dir: /etc/nginx/certs
+    lan_https_domains:
+      - app.kibana.lan
+      - app.elk.lan
+      - app.elastic.lan
+      - app.grafana.lan
+      - app.prometheus.lan
+      - app.jenkins.lan
+      - app.open-webui.lan
+      - app.llm.lan
+      - app.taiga.lan
+
+    # ssl_certificate is valid in the http context, so every vhost inherits
+    # the same leaf — vhosts only need `listen 443 ssl;`.
+    ssl_config: |
+      ssl_protocols TLSv1.2 TLSv1.3;
+      ssl_certificate /etc/nginx/certs/lan.crt;
+      ssl_certificate_key /etc/nginx/certs/lan.key;
+      add_header Strict-Transport-Security "max-age=31536000" always;
+
+    cert_renew_script: |
+      #!/usr/bin/env bash
+      # Regenerate the LAN leaf cert when it is missing, its SAN list has
+      # drifted from /etc/lan-ca/domains, or it expires within 60 days.
+      # Prints "ok" or "regenerated (<reason>)".
+      set -euo pipefail
+      CA_DIR=/etc/lan-ca
+      CERT_DIR=/etc/nginx/certs
+      CERT="$CERT_DIR/lan.crt"
+      KEY="$CERT_DIR/lan.key"
+      WANTED=$(xargs < "$CA_DIR/domains")
+      need=""
+      if [ ! -s "$CERT" ] || [ ! -s "$KEY" ]; then
+        need=missing
+      elif ! openssl x509 -in "$CERT" -noout -checkend $((60 * 86400)); then
+        need=expiring
+      else
+        CERT_SANS=$(openssl x509 -in "$CERT" -noout -ext subjectAltName | awk 'NR==2' \
+          | sed 's/DNS://g; s/,/ /g' | tr ' ' '\n' | sed '/^$/d' | sort)
+        WANTED_SANS=$(echo "$WANTED" | tr ' ' '\n' | sort)
+        if [ "$CERT_SANS" != "$WANTED_SANS" ]; then
+          need=san-drift
+        fi
+      fi
+      if [ -n "$need" ]; then
+        mkdir -p "$CERT_DIR"
+        chmod 700 "$CERT_DIR"
+        openssl genrsa -out "$KEY" 2048
+        chmod 600 "$KEY"
+        openssl req -new -key "$KEY" -out "$CA_DIR/lan.csr" -subj "/CN=app.lan"
+        {
+          echo "subjectAltName=$(echo "$WANTED" | tr ' ' '\n' | sed 's/^/DNS:/' | paste -sd, -)"
+          echo "keyUsage=digitalSignature,keyEncipherment"
+          echo "extendedKeyUsage=serverAuth"
+        } > "$CA_DIR/san.cnf"
+        openssl x509 -req -in "$CA_DIR/lan.csr" -CA "$CA_DIR/ca.pem" -CAkey "$CA_DIR/ca.key" \
+          -CAcreateserial -days 730 -sha256 -extfile "$CA_DIR/san.cnf" -out "$CERT"
+        # nginx reads its cert at startup/reload — pick up the new leaf now
+        # (no-op on first runs, before the service exists).
+        if systemctl is-active --quiet nginx; then
+          nginx -t && systemctl reload nginx
+        fi
+        echo "regenerated ($need)"
+      else
+        echo "ok"
+      fi
+
     # --- virtual hosts -----------------------------------------------------------
     default_vhost: |
       server {
           listen 80 default_server;
+          listen 443 ssl default_server;
           server_name _;
+
+          # Every other vhost listens on 443 only, so this catch-all also
+          # owns plain HTTP for the known names: upgrade in place.
+          if ($scheme = http) {
+              return 301 https://$host$request_uri;
+          }
 
           return 200 "nginx proxy alive\n";
           add_header Content-Type text/plain;
@@ -74,7 +156,7 @@
 
     kibana_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.kibana.lan app.elk.lan;
 
           location / {
@@ -93,7 +175,7 @@
 
     elasticsearch_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.elastic.lan;
 
           location / {
@@ -108,7 +190,7 @@
 
     grafana_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.grafana.lan;
 
           location / {
@@ -127,7 +209,7 @@
 
     prometheus_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.prometheus.lan;
 
           location / {
@@ -142,7 +224,7 @@
 
     jenkins_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.jenkins.lan;
 
           location / {
@@ -162,7 +244,7 @@
 
     open_webui_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.open-webui.lan;
 
           location / {
@@ -186,7 +268,7 @@
     # proxies back to the static server that streams the file locally.
     taiga_vhost: |
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.taiga.lan;
 
           client_max_body_size 100M;
@@ -270,7 +352,7 @@
       }
 
       server {
-          listen 80;
+          listen 443 ssl;
           server_name app.llm.lan;
 
           location / {
@@ -289,6 +371,9 @@
               # instance (llm_pool round-robin) actually served the request,
               # so it can be traced into llm-logs-* by that port.
               proxy_set_header X-Request-Id $request_id;
+              # local add_headers disable http-context inheritance, so the
+              # HSTS header must be repeated here
+              add_header Strict-Transport-Security "max-age=31536000" always;
               add_header X-Request-Id $request_id always;
               add_header X-Upstream $upstream_addr always;
               proxy_buffering off;
@@ -461,6 +546,98 @@
         mode: "0644"
         content: "{{ websocket_config }}"
 
+    - name: Deploy TLS configuration (http context)
+      ansible.builtin.copy:
+        dest: /etc/nginx/conf.d/30-ssl.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ ssl_config }}"
+      notify: restart nginx
+
+    # --- LAN TLS: local CA + leaf cert -------------------------------------------
+    # .lan is private DNS, so the CA root is ours and clients trust it once
+    # (Mac keychain, iOS profile, ...). The leaf is signed for every
+    # server_name in this play and renewed unattended by the daily timer.
+    - name: Create the LAN CA directory
+      ansible.builtin.file:
+        path: "{{ lan_ca_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Generate the LAN CA (first run only)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ lan_ca_dir }}
+        openssl genrsa -out ca.key 4096
+        chmod 600 ca.key
+        openssl req -x509 -new -key ca.key -sha256 -days 3650 \
+          -subj "/CN=LAN Home CA" -out ca.pem
+      args:
+        creates: "{{ lan_ca_dir }}/ca.pem"
+
+    - name: Deploy the SAN domain list for the leaf cert
+      ansible.builtin.copy:
+        dest: "{{ lan_ca_dir }}/domains"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ lan_https_domains | join('\n') + '\n' }}"
+
+    - name: Deploy the cert renewal script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/lan-cert-renew.sh
+        owner: root
+        group: root
+        mode: "0755"
+        content: "{{ cert_renew_script }}"
+
+    - name: Ensure the leaf cert exists, matches the SAN list, is not expiring
+      ansible.builtin.command:
+        cmd: /usr/local/bin/lan-cert-renew.sh
+      register: lan_cert
+      changed_when: "'regenerated' in lan_cert.stdout"
+      # no handler needed: the script reloads nginx itself when it renews,
+      # and the explicit restart later in the play covers first runs
+
+    - name: Deploy the daily cert renewal units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ item.content }}"
+      loop:
+        - name: lan-cert-renew.service
+          content: |
+            [Unit]
+            Description=Renew the *.lan leaf certificate if needed
+            After=network.target
+
+            [Service]
+            Type=oneshot
+            ExecStart=/usr/local/bin/lan-cert-renew.sh
+        - name: lan-cert-renew.timer
+          content: |
+            [Unit]
+            Description=Daily renewal of the *.lan leaf certificate
+
+            [Timer]
+            OnCalendar=daily
+            Persistent=true
+
+            [Install]
+            WantedBy=timers.target
+
+    - name: Enable the daily cert renewal timer
+      ansible.builtin.systemd:
+        name: lan-cert-renew.timer
+        state: started
+        enabled: true
+        daemon_reload: true
+
     - name: Deploy virtual hosts
       ansible.builtin.copy:
         dest: "/etc/nginx/sites-available/{{ item.file }}"
@@ -552,29 +729,52 @@
         state: started
         enabled: true
 
+    # Notified restart handlers only flush at play END, so every
+    # verification below would otherwise probe a still-old nginx. Restart
+    # explicitly here so the http→https redirect, TLS and body-capture
+    # probes all run against the config we just wrote.
+    - name: Restart nginx to load the freshly deployed configuration
+      ansible.builtin.systemd:
+        name: nginx
+        state: restarted
+
     - name: Wait for nginx to listen
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: 80
         timeout: 60
 
-    - name: Verify the default server answers
+    - name: Verify the default server redirects http to https
       ansible.builtin.uri:
         url: "http://127.0.0.1/"
-        status_code: 200
+        status_code: 301
+        follow_redirects: none
         timeout: 10
       register: nginx_default
-      until: nginx_default.status == 200
+      until: nginx_default.status == 301
       retries: 10
       delay: 3
       changed_when: false
 
-    - name: "Verify a vhost proxies (Host: app.kibana.lan)"
+    - name: Verify the default server answers over https
       ansible.builtin.uri:
-        url: "http://127.0.0.1/api/status"
+        url: "https://127.0.0.1/"
+        status_code: 200
+        validate_certs: false
+        timeout: 10
+      register: nginx_default_https
+      until: nginx_default_https.status == 200
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    - name: "Verify a vhost proxies over https (Host: app.kibana.lan)"
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/api/status"
         headers:
           Host: app.kibana.lan
         status_code: [200]
+        validate_certs: false
         timeout: 30
       register: nginx_kibana
       until: nginx_kibana.status == 200
@@ -582,35 +782,36 @@
       delay: 10
       changed_when: false
 
-    # Notified restart handlers only flush at play END, so the capture
-    # verification below would otherwise probe a still-old nginx. Restart
-    # here explicitly (idempotent — also loads the newly installed lua module
-    # and the lua-file-backed config).
-    - name: Restart nginx to load the body capture configuration
-      ansible.builtin.systemd:
-        name: nginx
-        state: restarted
-
-    - name: Wait for nginx to listen again
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: 80
-        timeout: 60
-
     # Any HTTP response works (even a 4xx/502 from llama) — the capture hooks
     # in the llm location run on POST+json requests regardless of status, so
     # a non-empty bodies.log proves the lua script ran end to end.
     - name: Verify body capture records a JSON POST through the llm vhost
       ansible.builtin.shell: |
         set -euo pipefail
-        curl -s -o /dev/null -X POST -H 'Host: app.llm.lan' \
+        curl -sk -o /dev/null -X POST -H 'Host: app.llm.lan' \
           -H 'Content-Type: application/json' \
           --data '{"capture_probe":true}' \
-          http://127.0.0.1/health
+          https://127.0.0.1/health
         sleep 2
         grep -q capture_probe /var/log/nginx/bodies.log
       args:
         executable: /bin/bash
+      changed_when: false
+
+    # The same check a browser performs: the served leaf must verify against
+    # the LAN CA root (trusted on the client) and carry every SAN in the
+    # domain list.
+    - name: Verify the served leaf is signed by the LAN CA and carries all SANs
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo | openssl s_client -connect 127.0.0.1:443 -servername app.taiga.lan \
+          -CAfile {{ lan_ca_dir }}/ca.pem 2>/dev/null \
+          | grep -q "Verify return code: 0 (ok)"
+        SAN=$(echo | openssl s_client -connect 127.0.0.1:443 -servername app.taiga.lan 2>/dev/null \
+          | openssl x509 -noout -ext subjectAltName | awk 'NR==2')
+        for d in {{ lan_https_domains | join(' ') }}; do
+            echo "$SAN" | grep -qE "DNS:${d}(,|$)"
+        done
       changed_when: false
 
     # --- Fluent Bit (JSON access log -> OpenSearch) -----------------------------

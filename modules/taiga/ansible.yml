@@ -147,8 +147,8 @@
     # no plugins/importers/oauth).
     front_conf_json: |
       {
-          "api": "http://app.taiga.lan/api/v1/",
-          "eventsUrl": "ws://app.taiga.lan/events",
+          "api": "https://app.taiga.lan/api/v1/",
+          "eventsUrl": "wss://app.taiga.lan/events",
           "baseHref": "/",
           "eventsMaxMissedHeartbeats": 5,
           "eventsHeartbeatIntervalTime": 60000,
