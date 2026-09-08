@@ -7,30 +7,23 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-all deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
+.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
 
 # Deploy every service in dependency order, sequentially, stopping on the
-# first failure: dns (foundation) -> elk (hard prereq: both deploy-nginx and
-# deploy-llm-observability wait_for es:9200) -> independent backends ->
+# first failure: dns (foundation) -> elk (hard prereq: deploy-nginx
+# wait_for es:9200) -> independent backends ->
 # consumers (open-webui, nginx) -> observability (monitoring, exporters).
 # Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
 deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-llm deploy-jenkins \
 	deploy-jenkins-agent deploy-open-webui deploy-nginx \
-	deploy-llm-observability deploy-monitoring deploy-exporters
+	deploy-monitoring
 
 deploy-llm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/ansible.yml \
 		--extra-vars "ansible_host=$(call tfvar,llm_ip)"
-
-# Request-plane observability on the LLM VM (nginx JSON access log + Filebeat
-# shipper to the ELK VM). Standalone on purpose: rolls out WITHOUT the
-# disruptive full deploy-llm run. Requires the ELK VM to be up.
-deploy-llm-observability:
-	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/observability.yml \
-		--extra-vars "ansible_host=$(call tfvar,llm_ip) es_host=$(call tfvar,elk_ip)"
 
 deploy-vllm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/vllm.yml \

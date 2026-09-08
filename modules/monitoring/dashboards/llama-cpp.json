@@ -223,7 +223,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 4
+        "y": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -262,7 +262,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 4
+        "y": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -301,7 +301,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 12
+        "y": 16
       },
       "fieldConfig": {
         "defaults": {
@@ -340,7 +340,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 12
+        "y": 16
       },
       "fieldConfig": {
         "defaults": {
@@ -379,7 +379,7 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 20
+        "y": 4
       },
       "fieldConfig": {
         "defaults": {
@@ -426,7 +426,7 @@
         "h": 4,
         "w": 4,
         "x": 4,
-        "y": 20
+        "y": 4
       },
       "fieldConfig": {
         "defaults": {
@@ -473,7 +473,7 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 20
+        "y": 4
       },
       "fieldConfig": {
         "defaults": {
@@ -528,7 +528,7 @@
         "h": 4,
         "w": 4,
         "x": 12,
-        "y": 20
+        "y": 4
       },
       "fieldConfig": {
         "defaults": {

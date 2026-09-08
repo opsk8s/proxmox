@@ -19,9 +19,8 @@
 # 192.168.51.0/24.
 #
 # Ingestion is server-side: the index template sets index.default_pipeline,
-# so Filebeat ships raw lines and OpenSearch parses/normalizes. (Filebeat
-# keeps setup.template/ilm=false — see modules/llm/observability.yml and
-# modules/nginx/ansible.yml.)
+# so the shippers send raw lines and OpenSearch parses/normalizes. (Fluent
+# Bit keeps setup.template/ilm=false — see modules/nginx/ansible.yml.)
 #
 # Dashboards are classic saved objects (data views + TSVB line/area charts +
 # dashboards) imported as NDJSON via
@@ -38,8 +37,9 @@
     ansible_python_interpreter: /usr/bin/python3
     # es_ip: terraform passes it via extra_vars (proxmox.tfvars)
 
-    # Indices: Filebeat on the LLM VM ships into llm-logs-YYYY.MM.dd
-    # (see modules/llm/observability.yml). 14-day retention, then delete.
+    # Indices: llm-logs-YYYY.MM.dd (LLM log shipping removed 2026-09-08 —
+    # no new indices will appear; existing ones age out under the policy).
+    # 14-day retention, then delete.
     # OpenSearch 2.x has NO ES-style ILM API (the /_ilm handlers do not
     # exist in the 2.19 index-management plugin) — retention is done with
     # ISM policies under /_plugins/_ism. The index template attaches the
@@ -83,10 +83,9 @@
           index.default_pipeline: llama-logs
         mappings:
           # 'instance' is the llama-server port (8001-8004), added by the
-          # per-port Fluent Bit filters on the LLM VM (modules/llm/
-          # observability.yml). It is the join key with nginx-access
-          # upstream_addr (the llm_pool round-robin target). Records
-          # shipped before that change carry no instance.
+          # per-port Fluent Bit filters on the LLM VM (LLM log shipping
+          # removed 2026-09-08). It was the join key with nginx-access
+          # upstream_addr (the llm_pool round-robin target).
           properties:
             instance:
               type: keyword

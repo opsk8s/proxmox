@@ -448,6 +448,33 @@
               su llm llm
           }
 
+    # LLM log shipping to OpenSearch (llm-logs-*) was removed: local logrotate
+    # above is the only retention we want. Purge the Fluent Bit shipper that
+    # the former observability.yml installed so a VM provisioned before that
+    # change stops shipping too.
+    - name: Check for a previously installed Fluent Bit shipper
+      ansible.builtin.stat:
+        path: /opt/fluent-bit/bin/fluent-bit
+      register: fluent_bit_shipper
+
+    - name: Stop and disable the old Fluent Bit shipper (if present)
+      ansible.builtin.systemd:
+        name: fluent-bit
+        state: stopped
+        enabled: false
+      when: fluent_bit_shipper.stat.exists
+
+    - name: Purge the old Fluent Bit shipper and its config (if present)
+      ansible.builtin.shell: |
+        set -e
+        apt-get purge -y fluent-bit
+        rm -f /etc/systemd/system/fluent-bit.service
+        systemctl daemon-reload
+        rm -rf /etc/fluent-bit /var/lib/fluent-bit
+      args:
+        executable: /bin/bash
+      when: fluent_bit_shipper.stat.exists
+
     # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
     # so the unit is Type=forking. The script's pre-flight kills any stale instance
     # on the port, which also makes systemctl restart behave.
