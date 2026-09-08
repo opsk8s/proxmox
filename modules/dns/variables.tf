@@ -63,6 +63,10 @@ variable "postgres_ip" {
   type = string
 }
 
+variable "taiga_ip" {
+  type = string
+}
+
 variable "monitoring_ip" {
   type = string
 }

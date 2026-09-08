@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-all deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
+.PHONY: deploy-all deploy-llm deploy-llm-observability deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
@@ -17,7 +17,7 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 # deploy-llm-observability wait_for es:9200) -> independent backends ->
 # consumers (open-webui, nginx) -> observability (monitoring, exporters).
 # Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
-deploy-all: deploy-dns deploy-elk deploy-postgres deploy-llm deploy-jenkins \
+deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-llm deploy-jenkins \
 	deploy-jenkins-agent deploy-open-webui deploy-nginx \
 	deploy-llm-observability deploy-monitoring deploy-exporters
 
@@ -58,8 +58,22 @@ deploy-postgres:
 		--extra-vars "postgres_password=$(call tfvar,postgres_password) \
 		smartshift_admin_password=$(call tfvar,smartshift_admin_password) \
 		analytics_ro_password=$(call tfvar,analytics_ro_password) \
+		taiga_db_password=$(call tfvar,taiga_db_password) \
 		ansible_host=$(call tfvar,postgres_ip) \
 		lan_network=$(call tfvar,lan_network)"
+
+# Taiga (project management) on the taiga VM: native install (gunicorn back,
+# celery worker, node events, protected media, static server, local rabbitmq)
+# against the shared postgres VM; the app.taiga.lan routing lives in the
+# central nginx module (deploy-nginx).
+# Requires deploy-postgres first (database + user). Also runs automatically
+# via the Terraform action trigger when the VM is created or updated.
+deploy-taiga:
+	$(ANSIBLE_PLAYBOOK) -i modules/taiga/inventory.ini modules/taiga/ansible.yml \
+		--extra-vars "taiga_db_password=$(call tfvar,taiga_db_password) \
+		taiga_admin_password=$(call tfvar,taiga_admin_password) \
+		postgres_ip=$(call tfvar,postgres_ip) \
+		ansible_host=$(call tfvar,taiga_ip)"
 
 # Monitoring VM (Prometheus + Grafana + blackbox). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
@@ -74,7 +88,8 @@ deploy-monitoring:
 		open_webui_ip=$(call tfvar,open_webui_ip) \
 		postgres_ip=$(call tfvar,postgres_ip) \
 		elk_ip=$(call tfvar,elk_ip) \
-		nginx_ip=$(call tfvar,nginx_ip)"
+		nginx_ip=$(call tfvar,nginx_ip) \
+		taiga_ip=$(call tfvar,taiga_ip)"
 
 # ELK VM (OpenSearch + Dashboards). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
@@ -94,6 +109,7 @@ deploy-dns:
 		jenkins_agent_ip=$(call tfvar,jenkins_agent_ip) \
 		open_webui_ip=$(call tfvar,open_webui_ip) \
 		postgres_ip=$(call tfvar,postgres_ip) \
+		taiga_ip=$(call tfvar,taiga_ip) \
 		monitoring_ip=$(call tfvar,monitoring_ip) \
 		elk_ip=$(call tfvar,elk_ip) \
 		nginx_ip=$(call tfvar,nginx_ip) \
@@ -109,7 +125,8 @@ deploy-nginx:
 		monitoring_ip=$(call tfvar,monitoring_ip) \
 		jenkins_ip=$(call tfvar,jenkins_ip) \
 		open_webui_ip=$(call tfvar,open_webui_ip) \
-		llm_ip=$(call tfvar,llm_ip)"
+		llm_ip=$(call tfvar,llm_ip) \
+		taiga_ip=$(call tfvar,taiga_ip)"
 
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
 # Jenkins prometheus plugin). Idempotent — run after the service playbooks.
@@ -124,7 +141,8 @@ deploy-exporters:
 		"postgres $(call tfvar,postgres_ip)" \
 		"elk $(call tfvar,elk_ip)" \
 		"dns $(call tfvar,dns_ip)" \
-		"nginx $(call tfvar,nginx_ip)"; do \
+		"nginx $(call tfvar,nginx_ip)" \
+		"taiga $(call tfvar,taiga_ip)"; do \
 		group=$${entry%% *}; ip=$${entry##* }; \
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \

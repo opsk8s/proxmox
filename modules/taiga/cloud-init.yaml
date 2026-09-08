@@ -1,0 +1,13 @@
+#cloud-config
+hostname: taiga
+timezone: Europe/Zurich
+users:
+  - name: taiga
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${taiga_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server

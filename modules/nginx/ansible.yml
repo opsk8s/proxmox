@@ -7,6 +7,7 @@
 #   app.jenkins.lan                    -> jenkins:8080
 #   app.open-webui.lan                 -> open-webui:8080
 #   app.llm.lan                        -> llm:8001-8004 (round robin)
+#   app.taiga.lan                      -> taiga:8000/8003/8080/8888 (per-location)
 #
 # Every request is recorded with the json_analytics log format (one JSON
 # object per line). Fluent Bit on this VM ships /var/log/nginx/access.log to
@@ -175,6 +176,86 @@
               proxy_set_header Connection $connection_upgrade;
               proxy_read_timeout 300s;
               proxy_send_timeout 300s;
+          }
+      }
+
+    # The taiga VM runs back (:8000), protected (:8003), a static server
+    # (:8080: front + django static + media) and events (:8888). /_protected/
+    # is the X-Accel-Redirect target emitted by the protected service for
+    # /media/ requests — nginx resolves it via the location below, which
+    # proxies back to the static server that streams the file locally.
+    taiga_vhost: |
+      server {
+          listen 80;
+          server_name app.taiga.lan;
+
+          client_max_body_size 100M;
+          charset utf-8;
+
+          # Frontend (SPA)
+          location / {
+              proxy_pass http://{{ taiga_ip }}:8080/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          # API
+          location /api/ {
+              proxy_pass http://{{ taiga_ip }}:8000/api/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          # Admin
+          location /admin/ {
+              proxy_pass http://{{ taiga_ip }}:8000/admin/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          # Django static files
+          location /static/ {
+              proxy_pass http://{{ taiga_ip }}:8080/static/;
+          }
+
+          # Unprotected media exports
+          location /media/exports/ {
+              proxy_pass http://{{ taiga_ip }}:8080/media/exports/;
+          }
+
+          # Protected media — the protected service answers with
+          # X-Accel-Redirect: /_protected/<file>, which nginx resolves
+          # against the location below.
+          location /media/ {
+              proxy_pass http://{{ taiga_ip }}:8003/;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          # X-Accel-Redirect target of the protected service
+          location /_protected/ {
+              internal;
+              proxy_pass http://{{ taiga_ip }}:8080/_protected/;
+          }
+
+          # Events (websocket; the client lives for days, so long timeouts)
+          location /events {
+              proxy_pass http://{{ taiga_ip }}:8888/events;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_connect_timeout 7d;
+              proxy_send_timeout 7d;
+              proxy_read_timeout 7d;
           }
       }
 
@@ -396,6 +477,7 @@
         - { file: "app-jenkins.conf", content: "{{ jenkins_vhost }}" }
         - { file: "app-open-webui.conf", content: "{{ open_webui_vhost }}" }
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
+        - { file: "app-taiga.conf", content: "{{ taiga_vhost }}" }
       notify: restart nginx
 
     - name: Enable virtual hosts
@@ -412,6 +494,7 @@
         - app-jenkins.conf
         - app-open-webui.conf
         - app-llm.conf
+        - app-taiga.conf
 
     # The distro nginx.conf also declares `access_log /var/log/nginx/access.log;`
     # in the http context — with the json_analytics directive pointing at the

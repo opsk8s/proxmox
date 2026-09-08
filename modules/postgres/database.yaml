@@ -31,3 +31,13 @@ databases:
     permissions: [CONNECT, TEMPORARY]
     schemas:
       - name: ro
+
+  # Taiga (project management, docker stack on the taiga VM) connects over
+  # the LAN (the host all 192.168.51.0/24 scram-sha-256 pg_hba rule).
+  - name: taiga
+    user: taiga
+    password: "{{ taiga_db_password }}"
+    permissions: [ALL]
+    schemas:
+      - name: public
+        owner: taiga

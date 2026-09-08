@@ -30,6 +30,10 @@ variable "analytics_ro_password" {
   type = string
 }
 
+variable "taiga_db_password" {
+  type = string
+}
+
 variable "ssh_private_key_file" {
   type = string
 }

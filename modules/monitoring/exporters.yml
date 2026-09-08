@@ -1,6 +1,6 @@
 ---
 # Installs the scrape targets on every VM:
-#   - node_exporter on all 8 VMs (CPU, RAM, disk, network, filesystem)
+#   - node_exporter on all 9 VMs (CPU, RAM, disk, network, filesystem)
 #   - AMD GPU textfile collector on llm-ubuntu (util, VRAM, temp, power)
 #   - unbound resolver stats textfile collector on dns
 #   - postgres_exporter on postgres
@@ -9,7 +9,7 @@
 #  blackbox_exporter on the monitoring VM, nothing to install beyond
 #  node_exporter)
 - name: Install metrics exporters
-  hosts: llm:jenkins:jenkins-agent:open-webui:postgres:elk:dns:nginx
+  hosts: llm:jenkins:jenkins-agent:open-webui:postgres:elk:dns:nginx:taiga
   become: true
   gather_facts: false
   vars:

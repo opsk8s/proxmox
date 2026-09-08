@@ -112,6 +112,7 @@ action "ansible_playbook_run" "configure_dns" {
       jenkins_agent_ip = var.jenkins_agent_ip
       open_webui_ip    = var.open_webui_ip
       postgres_ip      = var.postgres_ip
+      taiga_ip         = var.taiga_ip
       monitoring_ip    = var.monitoring_ip
       elk_ip           = var.elk_ip
       nginx_ip         = var.nginx_ip

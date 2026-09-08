@@ -59,6 +59,10 @@ variable "llm_ip" {
   type = string
 }
 
+variable "taiga_ip" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

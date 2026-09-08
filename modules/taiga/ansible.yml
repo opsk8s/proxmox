@@ -1,0 +1,722 @@
+---
+# Native (non-docker) install of the classic Taiga 6.x stack on the taiga VM.
+#
+# Layout on the VM (all services bind 0.0.0.0 so the central nginx VM can
+# reach them):
+#   /opt/taiga/taiga-back        6.10.2 (Django/gunicorn on :8000 + celery worker)
+#   /opt/taiga/taiga-protected   6.10.1 (gunicorn on :8003, X-Accel-Redirect to /_protected/)
+#   /opt/taiga/taiga-events      6.10.0 (node websocket push on :8888)
+#   /opt/taiga/static_server.py  stdlib static server on :8080
+#   /var/www/taiga               prebuilt taiga-front-dist 6.10.3 + conf.json
+#   /opt/taiga/venv-back         python 3.11 venv (uv) for back + celery
+#   /opt/taiga/venv-protected    python 3.11 venv (uv; protected pins an old gunicorn)
+#   /opt/nodejs                  node LTS tarball (taiga-events has no engines pin)
+#   /opt/taiga/.env              generated config + secrets (mode 600)
+#
+# Routing: the central nginx VM (modules/nginx) owns app.taiga.lan and proxies
+# per-location to the services above (front/static/media -> :8080, /api/ and
+# /admin/ -> :8000, /media/ -> :8003, /events -> :8888). The protected
+# service answers /media/ with X-Accel-Redirect: /_protected/<file>, which
+# the central nginx resolves by proxying to the static server (:8080), which
+# streams the file from the media directory as an attachment.
+#
+# External dependencies:
+#   - shared postgres VM (db + user "taiga" are created by the postgres module)
+#   - local rabbitmq-server (apt) — vhost "taiga", user "taiga"
+#
+# Secrets: TAIGA_SECRET_KEY and RABBITMQ_PASS are generated on this host at
+# first run and kept in /opt/taiga/.env (NOT in the repo). taiga_db_password
+# and taiga_admin_password come from terraform extra_vars.
+#
+# The services run as the `taiga` user created by cloud-init.
+#
+# Re-runs: the git checkouts are re-fetched at the pinned tags and the
+# services are restarted, so the playbook doubles as the update mechanism.
+- name: Deploy Taiga (native)
+  hosts: taiga
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    # terraform passes the values via ansible_playbook_run extra_vars
+    taiga_db_password: ""
+    taiga_admin_password: ""
+    postgres_ip: ""
+
+    # pinned sources — classic 6.x line (taigaio/taiga main is an unreleased
+    # rewrite, so the component repos are pinned by tag)
+    taiga_back_tag: "6.10.2"
+    taiga_protected_tag: "6.10.1"
+    taiga_events_tag: "6.10.0"
+    taiga_front_dist_tag: "6.10.3"
+
+    node_version: "24.20.0"   # node LTS (Krypton); taiga-events has no engines pin
+    python_version: "3.11"    # the back docker image is python:3.11-slim
+
+    taiga_root: /opt/taiga
+    node_root: /opt/nodejs
+    front_webroot: /var/www/taiga
+
+    # Dependency-free static file server (system python3). Serves the front
+    # dist, the django static files and the media directory so the central
+    # nginx VM can proxy all the file-based routes to :8080. /_protected/ is
+    # the X-Accel-Redirect target emitted by the protected service.
+    static_server_py: |
+      """Static file server for the Taiga VM.
+
+      Serves the frontend dist, the Django static files and the media
+      directory over plain HTTP so the central nginx VM can proxy the taiga
+      routes:
+        /               -> /var/www/taiga (SPA, falls back to index.html)
+        /static/        -> /opt/taiga/taiga-back/static
+        /media/exports/ -> /opt/taiga/taiga-back/media (as attachment)
+        /_protected/    -> /opt/taiga/taiga-back/media (as attachment; this
+                           is the X-Accel-Redirect target emitted by the
+                           protected service)
+      Runs as the `taiga` user via systemd (taiga-static.service).
+      """
+      import http.server
+      import mimetypes
+      import os
+      import shutil
+      from urllib.parse import unquote
+
+      FRONT = "/var/www/taiga"
+      STATIC = "/opt/taiga/taiga-back/static"
+      MEDIA = "/opt/taiga/taiga-back/media"
+      PORT = 8080
+
+
+      class Handler(http.server.BaseHTTPRequestHandler):
+          def _lookup(self):
+              """Map the request path to (file, attachment). file is None on miss."""
+              path = unquote(self.path.split("?", 1)[0].split("#", 1)[0])
+              for prefix, root, attachment in (
+                  ("/static/", STATIC, False),
+                  ("/media/exports/", MEDIA, True),
+                  ("/_protected/", MEDIA, True),
+              ):
+                  if path.startswith(prefix):
+                      file_ = self._confined(root, path[len(prefix):])
+                      if file_ is not None and os.path.isfile(file_):
+                          return file_, attachment
+                      return None, False
+              file_ = self._confined(FRONT, path.lstrip("/"))
+              if file_ is not None and os.path.isfile(file_):
+                  return file_, False
+              index = os.path.join(FRONT, "index.html")
+              if os.path.isfile(index):
+                  return index, False
+              return None, False
+
+          @staticmethod
+          def _confined(root, inner):
+              root = os.path.realpath(root)
+              file_ = os.path.realpath(os.path.join(root, inner))
+              if file_ != root and not file_.startswith(root + os.sep):
+                  return None
+              return file_
+
+          def _respond(self, include_body):
+              file_, attachment = self._lookup()
+              if file_ is None:
+                  self.send_error(404)
+                  return
+              self.send_response(200)
+              self.send_header("Content-Type", mimetypes.guess_type(file_)[0] or "application/octet-stream")
+              self.send_header("Content-Length", str(os.path.getsize(file_)))
+              if attachment:
+                  self.send_header("Content-Disposition", "attachment")
+              self.end_headers()
+              if include_body:
+                  with open(file_, "rb") as src:
+                      shutil.copyfileobj(src, self.wfile)
+
+          def do_GET(self):
+              self._respond(include_body=True)
+
+          def do_HEAD(self):
+              self._respond(include_body=False)
+
+
+      if __name__ == "__main__":
+          http.server.ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+
+    # taiga-front-dist conf.json — the conf.json.template @ 6.10.3 with the
+    # env vars resolved for this deployment (root subpath, community edition:
+    # no plugins/importers/oauth).
+    front_conf_json: |
+      {
+          "api": "http://app.taiga.lan/api/v1/",
+          "eventsUrl": "ws://app.taiga.lan/events",
+          "baseHref": "/",
+          "eventsMaxMissedHeartbeats": 5,
+          "eventsHeartbeatIntervalTime": 60000,
+          "eventsReconnectTryInterval": 10000,
+          "debug": false,
+          "debugInfo": false,
+          "defaultLanguage": "en",
+          "themes": ["taiga"],
+          "defaultTheme": "taiga",
+          "defaultLoginEnabled": true,
+          "publicRegisterEnabled": false,
+          "feedbackEnabled": true,
+          "supportUrl": "https://community.taiga.io/",
+          "privacyPolicyUrl": null,
+          "termsOfServiceUrl": null,
+          "maxUploadFileSize": null,
+          "contribPlugins": [],
+          "gitHubClientId": "",
+          "gitLabClientId": "",
+          "gitLabUrl": "",
+          "tagManager": { "accountId": null },
+          "tribeHost": null,
+          "enableAsanaImporter": false,
+          "enableGithubImporter": false,
+          "enableJiraImporter": false,
+          "enableTrelloImporter": false,
+          "gravatar": false,
+          "rtlLanguages": ["ar", "fa", "he"]
+      }
+
+    unit_back: |
+      [Unit]
+      Description=Taiga API (Django/gunicorn)
+      After=network.target rabbitmq-server.service
+      Wants=rabbitmq-server.service
+
+      [Service]
+      User=taiga
+      Group=taiga
+      WorkingDirectory={{ taiga_root }}/taiga-back
+      EnvironmentFile={{ taiga_root }}/.env
+      Environment=PYTHONUNBUFFERED=1
+      ExecStart={{ taiga_root }}/venv-back/bin/gunicorn taiga.wsgi:application --name taiga_api --bind 0.0.0.0:8000 --workers 3 --worker-tmp-dir /dev/shm --log-level=info --access-logfile -
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+    unit_async: |
+      [Unit]
+      Description=Taiga async worker (celery)
+      After=network.target rabbitmq-server.service
+      Wants=rabbitmq-server.service
+
+      [Service]
+      User=taiga
+      Group=taiga
+      WorkingDirectory={{ taiga_root }}/taiga-back
+      EnvironmentFile={{ taiga_root }}/.env
+      Environment=PYTHONUNBUFFERED=1
+      ExecStart={{ taiga_root }}/venv-back/bin/celery -A taiga.celery worker -B --concurrency 4 -l INFO
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+    unit_protected: |
+      [Unit]
+      Description=Taiga protected media server
+      After=network.target
+
+      [Service]
+      User=taiga
+      Group=taiga
+      WorkingDirectory={{ taiga_root }}/taiga-protected
+      ExecStart={{ taiga_root }}/venv-protected/bin/gunicorn server:app --name taiga_protected --bind 0.0.0.0:8003 --workers 4 --worker-tmp-dir /dev/shm --max-requests 3600 --max-requests-jitter 360 --timeout 60
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+    unit_events: |
+      [Unit]
+      Description=Taiga events (websocket push)
+      After=network.target rabbitmq-server.service
+      Wants=rabbitmq-server.service
+
+      [Service]
+      User=taiga
+      Group=taiga
+      WorkingDirectory={{ taiga_root }}/taiga-events
+      Environment=NODE_ENV=production
+      ExecStart={{ node_root }}/bin/node ./src/index.js
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+    unit_static: |
+      [Unit]
+      Description=Taiga static files (front, django static, media)
+      After=network.target
+
+      [Service]
+      User=taiga
+      Group=taiga
+      ExecStart=/usr/bin/python3 {{ taiga_root }}/static_server.py
+      Restart=on-failure
+      RestartSec=5
+
+      [Install]
+      WantedBy=multi-user.target
+
+  tasks:
+    # --- bootstrap -----------------------------------------------------------
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+        delay: 10
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Fail early when the taiga credentials are not provided
+      ansible.builtin.fail:
+        msg: "Pass taiga_db_password, taiga_admin_password and postgres_ip via the ansible_playbook_run extra_vars in Terraform"
+      when:
+        - (taiga_db_password | length == 0 or taiga_admin_password | length == 0 or postgres_ip | length == 0)
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: taiga
+
+    # --- base tooling ----------------------------------------------------------
+    - name: Install system dependencies
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+          - git
+          - unzip
+          - gettext
+          - build-essential
+          - libpq-dev
+          - libpq5
+          - rabbitmq-server
+        state: present
+
+    - name: Download uv release tarball
+      ansible.builtin.get_url:
+        url: https://github.com/astral-sh/uv/releases/latest/download/uv-x86_64-unknown-linux-gnu.tar.gz
+        dest: /tmp/uv.tar.gz
+        mode: "0644"
+
+    - name: Install uv (static release binary)
+      ansible.builtin.unarchive:
+        src: /tmp/uv.tar.gz
+        dest: /usr/local/bin
+        remote_src: true
+        extra_opts:
+          - --strip-components=1
+        creates: /usr/local/bin/uv
+
+    - name: Remove uv tarball
+      ansible.builtin.file:
+        path: /tmp/uv.tar.gz
+        state: absent
+
+    # The uv-managed interpreter must be installed for the taiga user: a
+    # root-run `uv venv` points the venv's python into /root (mode 700),
+    # which the taiga user (running every service) cannot exec.
+    - name: Install CPython {{ python_version }} via uv (for the taiga user)
+      ansible.builtin.command:
+        cmd: /usr/local/bin/uv python install {{ python_version }}
+      become_user: taiga
+      changed_when: false
+
+    - name: Install Node.js {{ node_version }} (LTS)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        mkdir -p {{ node_root }}
+        curl -fsSL https://nodejs.org/dist/v{{ node_version }}/node-v{{ node_version }}-linux-x64.tar.xz \
+          | tar -xJm -C {{ node_root }} --strip-components=1
+      args:
+        creates: "{{ node_root }}/bin/node"
+
+    # taiga_root is taiga-owned from the start: the taiga user (not root)
+    # creates the venvs inside it.
+    - name: Create the deployment directories
+      ansible.builtin.file:
+        path: "{{ item.name }}"
+        state: directory
+        owner: "{{ item.owner }}"
+        group: "{{ item.owner }}"
+        mode: "0755"
+      loop:
+        - { name: "{{ taiga_root }}", owner: taiga }
+        - { name: "{{ front_webroot }}", owner: root }
+
+    # --- configuration -----------------------------------------------------------
+    - name: Generate /opt/taiga/.env with on-host secrets (first run only)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cat > {{ taiga_root }}/.env <<EOF
+        # Generated by ansible. TAIGA_SECRET_KEY and RABBITMQ_PASS are created
+        # on this host at first run — they are NOT in the repo.
+        # To rotate taiga_db_password, delete this file and re-run the playbook.
+        DJANGO_SETTINGS_MODULE=settings.config
+        TAIGA_SITES_SCHEME=http
+        TAIGA_SITES_DOMAIN=app.taiga.lan
+        TAIGA_SUBPATH=
+        TAIGA_SECRET_KEY="$(openssl rand -hex 48)"
+        POSTGRES_HOST="{{ postgres_ip }}"
+        POSTGRES_PORT=5432
+        POSTGRES_DB=taiga
+        POSTGRES_USER=taiga
+        POSTGRES_PASSWORD="{{ taiga_db_password }}"
+        POSTGRES_SSLMODE=disable
+        RABBITMQ_USER=taiga
+        RABBITMQ_PASS="$(openssl rand -hex 24)"
+        TAIGA_ASYNC_RABBITMQ_HOST=127.0.0.1
+        TAIGA_EVENTS_RABBITMQ_HOST=127.0.0.1
+        CELERY_ENABLED=True
+        CELERY_TIMEZONE=Europe/Zurich
+        EMAIL_BACKEND=django.core.mail.backends.console.EmailBackend
+        DEFAULT_FROM_EMAIL=taiga@app.taiga.lan
+        EMAIL_HOST=
+        EMAIL_PORT=
+        EMAIL_HOST_USER=
+        EMAIL_HOST_PASSWORD=
+        EMAIL_USE_TLS=False
+        EMAIL_USE_SSL=False
+        SESSION_COOKIE_SECURE=False
+        CSRF_COOKIE_SECURE=False
+        PUBLIC_REGISTER_ENABLED=False
+        ENABLE_TELEMETRY=False
+        EOF
+        chmod 600 {{ taiga_root }}/.env
+      args:
+        executable: /bin/bash
+        creates: "{{ taiga_root }}/.env"
+      no_log: true
+
+    # --- sources --------------------------------------------------------------------
+    - name: Install taiga-back {{ taiga_back_tag }}
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d {{ taiga_root }}/taiga-back/.git ]; then
+          git -C {{ taiga_root }}/taiga-back fetch --depth 1 origin {{ taiga_back_tag }}
+          git -C {{ taiga_root }}/taiga-back checkout -f {{ taiga_back_tag }}
+        else
+          rm -rf {{ taiga_root }}/taiga-back
+          git clone --quiet --depth 1 --branch {{ taiga_back_tag }} \
+            https://github.com/taigaio/taiga-back {{ taiga_root }}/taiga-back
+        fi
+
+    - name: Install taiga-protected {{ taiga_protected_tag }}
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d {{ taiga_root }}/taiga-protected/.git ]; then
+          git -C {{ taiga_root }}/taiga-protected fetch --depth 1 origin {{ taiga_protected_tag }}
+          git -C {{ taiga_root }}/taiga-protected checkout -f {{ taiga_protected_tag }}
+        else
+          rm -rf {{ taiga_root }}/taiga-protected
+          git clone --quiet --depth 1 --branch {{ taiga_protected_tag }} \
+            https://github.com/taigaio/taiga-protected {{ taiga_root }}/taiga-protected
+        fi
+
+    - name: Install taiga-events {{ taiga_events_tag }}
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if [ -d {{ taiga_root }}/taiga-events/.git ]; then
+          git -C {{ taiga_root }}/taiga-events fetch --depth 1 origin {{ taiga_events_tag }}
+          git -C {{ taiga_root }}/taiga-events checkout -f {{ taiga_events_tag }}
+        else
+          rm -rf {{ taiga_root }}/taiga-events
+          git clone --quiet --depth 1 --branch {{ taiga_events_tag }} \
+            https://github.com/taigaio/taiga-events {{ taiga_root }}/taiga-events
+        fi
+
+    - name: Download the prebuilt front (taiga-front-dist {{ taiga_front_dist_tag }})
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf {{ taiga_root }}/taiga-front-dist-{{ taiga_front_dist_tag }}
+        curl -fsSL -o /tmp/taiga-front-dist.zip \
+          https://github.com/taigaio/taiga-front-dist/archive/refs/tags/{{ taiga_front_dist_tag }}.zip
+        unzip -q /tmp/taiga-front-dist.zip -d {{ taiga_root }}/
+        rm -f /tmp/taiga-front-dist.zip
+
+    # --- dependencies -------------------------------------------------------------------
+    # The venvs are created by the taiga user so their interpreter resolves
+    # inside /home/taiga (see the uv python install task above).
+    - name: Create the back virtualenv (python {{ python_version }})
+      ansible.builtin.shell: |
+        set -uo pipefail
+        # Rebuild venvs left by an older root-run uv: their interpreter
+        # lives under /root, which the taiga user cannot traverse.
+        if [ -f {{ taiga_root }}/venv-back/pyvenv.cfg ] \
+          && grep -q '^home = /root/' {{ taiga_root }}/venv-back/pyvenv.cfg; then
+          rm -rf {{ taiga_root }}/venv-back
+        fi
+        /usr/local/bin/uv venv --python {{ python_version }} {{ taiga_root }}/venv-back
+      become_user: taiga
+      failed_when: false
+      changed_when: false
+
+    - name: Install the back python dependencies
+      ansible.builtin.command:
+        cmd: /usr/local/bin/uv pip install --python {{ taiga_root }}/venv-back/bin/python -r {{ taiga_root }}/taiga-back/requirements.txt -r {{ taiga_root }}/taiga-back/requirements-contribs.txt
+      become_user: taiga
+      timeout: 3600
+
+    - name: Create the protected virtualenv (python {{ python_version }})
+      ansible.builtin.shell: |
+        set -uo pipefail
+        if [ -f {{ taiga_root }}/venv-protected/pyvenv.cfg ] \
+          && grep -q '^home = /root/' {{ taiga_root }}/venv-protected/pyvenv.cfg; then
+          rm -rf {{ taiga_root }}/venv-protected
+        fi
+        /usr/local/bin/uv venv --python {{ python_version }} {{ taiga_root }}/venv-protected
+      become_user: taiga
+      failed_when: false
+      changed_when: false
+
+    # setuptools<81: taiga-protected 6.10.1 pins gunicorn==19.9.0, which
+    # imports pkg_resources at startup; uv venvs do not ship setuptools and
+    # the pkg_resources module was removed in setuptools 81.
+    - name: Install the protected python dependencies
+      ansible.builtin.command:
+        cmd: /usr/local/bin/uv pip install --python {{ taiga_root }}/venv-protected/bin/python -r {{ taiga_root }}/taiga-protected/requirements.txt "setuptools<81"
+      become_user: taiga
+      timeout: 3600
+
+    - name: Install the events npm dependencies
+      ansible.builtin.shell: |
+        set -euo pipefail
+        export PATH={{ node_root }}/bin:$PATH
+        cd {{ taiga_root }}/taiga-events
+        npm install --no-audit --no-fund
+      timeout: 1800
+
+    # --- per-service config -----------------------------------------------------------------
+    - name: Install the back settings module (docker/config.py)
+      ansible.builtin.copy:
+        src: "{{ taiga_root }}/taiga-back/docker/config.py"
+        dest: "{{ taiga_root }}/taiga-back/settings/config.py"
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0644"
+
+    - name: Generate the events .env (derived from /opt/taiga/.env)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        cat > {{ taiga_root }}/taiga-events/.env <<EOF
+        RABBITMQ_URL="amqp://${RABBITMQ_USER}:${RABBITMQ_PASS}@${TAIGA_EVENTS_RABBITMQ_HOST}:5672/taiga"
+        WEB_SOCKET_SERVER_PORT=8888
+        APP_PORT=3023
+        SECRET="${TAIGA_SECRET_KEY}"
+        ALGORITHM="HS256"
+        AUDIENCE=
+        ISSUER=
+        USER_ID_CLAIM="user_id"
+        LOG_LEVEL="info"
+        EOF
+        chmod 600 {{ taiga_root }}/taiga-events/.env
+      args:
+        executable: /bin/bash
+
+    - name: Generate the protected .env (derived from /opt/taiga/.env)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        cat > {{ taiga_root }}/taiga-protected/.env <<EOF
+        SECRET_KEY="${TAIGA_SECRET_KEY}"
+        MAX_AGE=3600
+        TAIGA_SUBPATH=
+        EOF
+        chmod 600 {{ taiga_root }}/taiga-protected/.env
+      args:
+        executable: /bin/bash
+
+    # --- build artifacts ----------------------------------------------------------------------
+    - name: Compile the back translations
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ taiga_root }}/taiga-back
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        {{ taiga_root }}/venv-back/bin/python manage.py compilemessages
+
+    - name: Collect the back static files
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ taiga_root }}/taiga-back
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        mkdir -p media/exports
+        {{ taiga_root }}/venv-back/bin/python manage.py collectstatic --no-input
+
+    - name: Deploy the front dist to the web root
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cp -rf {{ taiga_root }}/taiga-front-dist-{{ taiga_front_dist_tag }}/dist/. {{ front_webroot }}/.
+
+    - name: Deploy the front conf.json
+      ansible.builtin.copy:
+        dest: "{{ front_webroot }}/conf.json"
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ front_conf_json }}"
+
+    - name: Deploy the static file server
+      ansible.builtin.copy:
+        dest: "{{ taiga_root }}/static_server.py"
+        content: "{{ static_server_py }}"
+        owner: root
+        group: root
+        mode: "0644"
+
+    # --- rabbitmq -------------------------------------------------------------------------------
+    - name: Enable and start rabbitmq-server
+      ansible.builtin.systemd:
+        name: rabbitmq-server
+        state: started
+        enabled: true
+
+    - name: Create the RabbitMQ vhost, user and permissions
+      ansible.builtin.shell: |
+        set -uo pipefail
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        for i in $(seq 15); do
+          rabbitmq-diagnostics check_running && break
+          sleep 2
+        done
+        rabbitmq-diagnostics check_running
+        rabbitmqctl add_vhost taiga 2>&1 || rabbitmqctl list_vhosts -q | grep -qx taiga
+        rabbitmqctl add_user taiga "${RABBITMQ_PASS}" 2>&1 || rabbitmqctl list_users -q | grep -qx taiga
+        rabbitmqctl set_permissions --vhost taiga taiga ".*" ".*" ".*"
+      args:
+        executable: /bin/bash
+
+    # --- services ---------------------------------------------------------------------------------
+    - name: Deploy the taiga systemd units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}"
+        content: "{{ item.content }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - { name: "taiga-back.service", content: "{{ unit_back }}" }
+        - { name: "taiga-async.service", content: "{{ unit_async }}" }
+        - { name: "taiga-protected.service", content: "{{ unit_protected }}" }
+        - { name: "taiga-events.service", content: "{{ unit_events }}" }
+        - { name: "taiga-static.service", content: "{{ unit_static }}" }
+
+    - name: Reload the systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Give the taiga user ownership of the deployment
+      ansible.builtin.shell: |
+        set -euo pipefail
+        chown -R taiga:taiga {{ taiga_root }}
+
+    # --- database + admin --------------------------------------------------------------------------
+    - name: Apply the database migrations
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ taiga_root }}/taiga-back
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        {{ taiga_root }}/venv-back/bin/python manage.py migrate --noinput
+      timeout: 1800
+
+    - name: Load the default project templates
+      ansible.builtin.shell: |
+        set -euo pipefail
+        cd {{ taiga_root }}/taiga-back
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        {{ taiga_root }}/venv-back/bin/python manage.py loaddata initial_project_templates
+      timeout: 600
+
+    - name: Create the admin superuser (first run only)
+      ansible.builtin.shell: |
+        set -uo pipefail
+        cd {{ taiga_root }}/taiga-back
+        set -a
+        . {{ taiga_root }}/.env
+        set +a
+        export DJANGO_SUPERUSER_USERNAME=admin
+        export DJANGO_SUPERUSER_EMAIL=admin@app.taiga.lan
+        export DJANGO_SUPERUSER_PASSWORD="{{ taiga_admin_password }}"
+        {{ taiga_root }}/venv-back/bin/python manage.py createsuperuser --noinput
+      register: taiga_superuser
+      failed_when: false
+      no_log: true
+
+    - name: Fail when the superuser could not be created
+      ansible.builtin.fail:
+        msg: "createsuperuser failed (output masked)"
+      when: >-
+        taiga_superuser.rc != 0
+        and 'already exists' not in (taiga_superuser.stdout ~ taiga_superuser.stderr)
+        and 'already taken' not in (taiga_superuser.stdout ~ taiga_superuser.stderr)
+
+    # --- start + verify ---------------------------------------------------------------------------------
+    # restarted (not started) so re-runs pick up the re-cloned code and env
+    - name: Start the taiga services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: restarted
+        enabled: true
+      loop:
+        - taiga-back
+        - taiga-async
+        - taiga-protected
+        - taiga-events
+        - taiga-static
+
+    - name: Wait for the static server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8080
+        timeout: 300
+
+    # Anything but a 5xx means the back (gunicorn) is up.
+    - name: Wait for the API to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8000/api/v1/"
+        status_code: [200, 400, 401, 403, 404, 405]
+        timeout: 30
+      register: taiga_api
+      until: taiga_api.status in [200, 400, 401, 403, 404, 405]
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Verify the frontend answers
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:8080/"
+        status_code: 200
+        timeout: 30
+      register: taiga_front
+      until: taiga_front.status == 200
+      retries: 10
+      delay: 5
+      changed_when: false

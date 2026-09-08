@@ -115,6 +115,7 @@ module "postgres" {
   postgres_password         = var.postgres_password
   smartshift_admin_password = var.smartshift_admin_password
   analytics_ro_password     = var.analytics_ro_password
+  taiga_db_password         = var.taiga_db_password
   ssh_private_key_file      = var.ssh_private_key_file
   cpu_cores                 = var.postgres_cpu_cores
   memory_mb                 = var.postgres_memory_mb
@@ -125,6 +126,28 @@ module "postgres" {
   keyboard_layout           = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+}
+
+module "taiga" {
+  source               = "./modules/taiga"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.taiga_cpu_cores
+  memory_mb            = var.taiga_memory_mb
+  lan_ip               = var.taiga_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+  taiga_db_password    = var.taiga_db_password
+  taiga_admin_password = var.taiga_admin_password
+  postgres_ip          = var.postgres_ip
+  keyboard_layout      = var.keyboard_layout
+
+  depends_on = [module.dns, module.postgres, proxmox_download_file.fedora_cloud_image]
 }
 
 module "monitoring" {
@@ -149,6 +172,7 @@ module "monitoring" {
   postgres_ip            = var.postgres_ip
   elk_ip                 = var.elk_ip
   nginx_ip               = var.nginx_ip
+  taiga_ip               = var.taiga_ip
   keyboard_layout        = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -193,6 +217,7 @@ module "dns" {
   jenkins_agent_ip     = var.jenkins_agent_ip
   open_webui_ip        = var.open_webui_ip
   postgres_ip          = var.postgres_ip
+  taiga_ip             = var.taiga_ip
   monitoring_ip        = var.monitoring_ip
   elk_ip               = var.elk_ip
   nginx_ip             = var.nginx_ip
@@ -220,6 +245,7 @@ module "nginx" {
   jenkins_ip           = var.jenkins_ip
   open_webui_ip        = var.open_webui_ip
   llm_ip               = var.llm_ip
+  taiga_ip             = var.taiga_ip
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]

@@ -62,6 +62,16 @@ variable "analytics_ro_password" {
   description = "Password for the analytics_ro role (see modules/postgres/database.yaml)"
 }
 
+variable "taiga_db_password" {
+  type        = string
+  description = "Password for the taiga database user (see modules/postgres/database.yaml)"
+}
+
+variable "taiga_admin_password" {
+  type        = string
+  description = "Taiga admin (superuser) password, created on the first deploy run"
+}
+
 variable "grafana_admin_password" {
   type        = string
   description = "Grafana admin password"
@@ -110,6 +120,11 @@ variable "open_webui_ip" {
 variable "postgres_ip" {
   type        = string
   description = "IP of the PostgreSQL VM"
+}
+
+variable "taiga_ip" {
+  type        = string
+  description = "IP of the Taiga VM"
 }
 
 variable "monitoring_ip" {
@@ -226,5 +241,15 @@ variable "nginx_cpu_cores" {
 variable "nginx_memory_mb" {
   type    = number
   default = 2048
+}
+
+variable "taiga_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "taiga_memory_mb" {
+  type    = number
+  default = 4096
 }
 

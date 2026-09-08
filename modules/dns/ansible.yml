@@ -25,6 +25,7 @@
       - "address=/jenkins-agent.lan/{{ jenkins_agent_ip }}"
       - "address=/open-webui.lan/{{ open_webui_ip }}"
       - "address=/postgres.lan/{{ postgres_ip }}"
+      - "address=/taiga.lan/{{ taiga_ip }}"
       - "address=/monitoring.lan/{{ monitoring_ip }}"
       - "address=/grafana.lan/{{ monitoring_ip }}"
       - "address=/prometheus.lan/{{ monitoring_ip }}"
@@ -42,6 +43,7 @@
       - "address=/app.jenkins.lan/{{ nginx_ip }}"
       - "address=/app.open-webui.lan/{{ nginx_ip }}"
       - "address=/app.llm.lan/{{ nginx_ip }}"
+      - "address=/app.taiga.lan/{{ nginx_ip }}"
 
   tasks:
     - name: Wait for SSH (first boot)

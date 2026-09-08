@@ -1,0 +1,18 @@
+{
+  "id": "request-flow-llm",
+  "title": "Request Flow (LLM)",
+  "description": "End-to-end flow of an LLM request across the three log planes. Proxy side (nginx-access-*): requests/latency per upstream instance — upstream_addr is ip:port and the port IS the llama-server instance. Body plane (nginx-body-*): captured JSON API traffic, linked 1:1 to access records by request_id. Backend side (llm-logs-*): completions and throughput per instance. To trace one request: find it in the ingress panels (time + instance), then read the backend panels for the same instance and time window — with -np 1 there is exactly one llama task per instance per window.",
+  "panels": [
+    { "title": "LLM requests per instance", "x": 0, "y": 0, "w": 24, "h": 10 },
+    { "title": "Request latency per instance (s)", "x": 0, "y": 10, "w": 12, "h": 10 },
+    { "title": "LLM 5xx errors", "x": 12, "y": 10, "w": 12, "h": 10 },
+    { "title": "Captured body bytes streamed", "x": 0, "y": 20, "w": 12, "h": 10 },
+    { "title": "Completed generations per instance", "x": 12, "y": 20, "w": 12, "h": 10 },
+    { "title": "Generation throughput per instance (t/s)", "x": 0, "y": 30, "w": 24, "h": 10 }
+  ],
+  "data_views": [
+    { "id": "nginx-access-data-view", "title": "NGINX Access", "pattern": "nginx-access-*" },
+    { "id": "nginx-body-data-view", "title": "NGINX Body", "pattern": "nginx-body-*" },
+    { "id": "llm-logs-data-view", "title": "LLM Logs", "pattern": "llm-logs-*" }
+  ]
+}

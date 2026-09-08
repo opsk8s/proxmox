@@ -48,6 +48,8 @@
               labels: {instance_name: "dns"}
             - targets: ["{{ nginx_ip }}:9100"]
               labels: {instance_name: "nginx"}
+            - targets: ["{{ taiga_ip }}:9100"]
+              labels: {instance_name: "taiga"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -80,6 +82,8 @@
             # default_server on the proxy answers 200 "nginx proxy alive"
             - targets: ["http://{{ nginx_ip }}:80/"]
               labels: {instance_name: "nginx"}
+            - targets: ["http://{{ taiga_ip }}:9000/"]
+              labels: {instance_name: "taiga"}
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target
