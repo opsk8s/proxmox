@@ -28,7 +28,7 @@ Client → `*.lan` (dnsmasq, 24 static records) → nginx :443 (10-year local CA
 - `app.jenkins.lan` → jenkins :8080 (3600 s proxy timeouts)
 - `app.webui.lan` → open-webui :8080
 - `app.taiga.lan` → taiga :8080 (front/static), :8000 (api/admin), :8003 (media), :8888 (events/SSE with 7-day timeouts); `/_protected/` resolves via X-Accel-Redirect to the in-VM static server
-- `app.llm.lan` → round-robin pool 8001–8004 (`proxy_buffering off`, `X-Request-Id`/`X-Upstream` headers, 3 lua hooks for body capture)
+- `app.llm.lan` → round-robin pool 8001–8004 (`proxy_buffering off`, `X-Request-Id`/`X-Upstream` headers, 3 lua hooks for parsed body capture → `llm-request-body-*` / `llm-response-body-*`)
 - `app.kibana.lan` → dashboards :5601, `app.elastic.lan` → opensearch :9200, `grafana.lan` → :3000, `prometheus.lan` → :9090
 - default server 301s to https; HSTS enabled
 
@@ -39,9 +39,10 @@ Client → `*.lan` (dnsmasq, 24 static records) → nginx :443 (10-year local CA
 ### Logs
 
 - llama-server logs — **local only** (14-day logrotate on the LLM VM). Shipping to OpenSearch `llm-logs-*` (former `modules/llm/observability.yml` Fluent Bit shipper) was removed 2026-09-08 as useless; `modules/llm/ansible.yml` now purges the old shipper on existing VMs. The ELK-side `llm-logs` ingest pipeline / index template / ISM policy / `llm-observability` dashboard are still deployed (harmless dead config; existing indices age out under the 14-day policy)
-- nginx access (JSON `json_analytics` format) + lua-captured request/response bodies → Fluent Bit (nginx VM) → `nginx-access-*` / `nginx-body-*`
+- nginx access (JSON `json_analytics` format) → Fluent Bit (nginx VM) → `nginx-access-*` (14d ISM)
+- LLM request/response bodies — the lua capture on the llm vhost parses each JSON POST into two structured documents: the request doc embeds the decoded OpenAI payload as a queryable object (`request_body.messages[].role`/`content`, `tools[].function.name`/`parameters`, content part-arrays joined to text) with top-level `model`/`stream`/`messages_count`/`system_prompt`/`user_message` summaries, the response doc keeps its SSE-parsed fields (completion id/model/usage/finish_reason, concatenated `content` + `reasoning_content`) next to the raw stream, and both carry the full `json_analytics` identification fields (host, time_local, remote_addr, remote_user, request, status, body_bytes_sent, request_time, referrer, user-agent, XFF, upstream_addr/response_time/status, request_id) → `llm-request-body-YYYY.MM.dd` / `llm-response-body-YYYY.MM.dd` (90d ISM). The raw `nginx-body-*` capture was replaced 2026-09-08 (its indices age out under the 14d policy)
 - OpenSearch ingest pipeline `llama-logs` groks 9 slot-line shapes + painless classifier + ~25 convert processors (with `_simulate` sanity assertion)
-- 14-day ISM retention on all log indices, matching 14-day logrotate on the LLM VM and Fluent Bit rotated-file exclusion
+- ISM retention: 14d on access/body indices (matching 14-day logrotate on the LLM VM and Fluent Bit rotated-file exclusion), 90d on `llm-request-body-*` / `llm-response-body-*`
 - Fluent Bit replaced Filebeat because Beats ≥7.13's unconditional `GET /_license` probe breaks against OpenSearch
 - Three saved-object dashboards (`llm-observability`, `nginx-proxy-analytics`, `request-flow-llm`) imported into Dashboards
 

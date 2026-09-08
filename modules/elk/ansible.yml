@@ -146,6 +146,11 @@
     # the nginx-access-* analytics record of the same proxied request. The
     # bodies are mapped as full-text (searchable) without keyword subfields,
     # so multi-MB payloads are not duplicated in an unindexed keyword copy.
+    #
+    # nginx-body-* shipping was REPLACED 2026-09-08 by the parsed
+    # llm-request-body-* / llm-response-body-* indices (templates below);
+    # this template + the ISM entry stay so existing nginx-body-* indices
+    # keep aging out under the 14d policy.
     nginx_body_index_template:
       index_patterns:
         - nginx-body-*
@@ -190,6 +195,322 @@
               type: text
             response_body:
               type: text
+
+    # Parsed LLM request/response body indices. The lua capture on the nginx
+    # proxy (modules/nginx/files/body-capture.lua) parses every LLM API POST
+    # into two structured documents -- the OpenAI-compatible request payload
+    # and the response (SSE chunk stream or single completion JSON) -- and
+    # Fluent Bit ships them into llm-request-body-YYYY.MM.dd /
+    # llm-response-body-YYYY.MM.dd. 90-day retention: the bodies are the
+    # analysis target, kept far longer than the 14-day access indices. The
+    # identification fields (host, time_local, request, status, ...) mirror
+    # the nginx-access-* json_analytics fields; join on request_id.
+    llm_body_ism_policy:
+      policy:
+        description: LLM request/response body 90-day retention
+        default_state: hot
+        ism_template:
+          index_patterns:
+            - llm-request-body-*
+            - llm-response-body-*
+        states:
+          - name: hot
+            actions: []
+            transitions:
+              - state_name: delete
+                conditions:
+                  min_index_age: 90d
+          - name: delete
+            actions:
+              - delete: {}
+            transitions: []
+
+    llm_request_body_index_template:
+      index_patterns:
+        - llm-request-body-*
+      priority: 200
+      template:
+        settings:
+          index.number_of_shards: 1
+          index.number_of_replicas: 0
+          index.plugins.index_state_management.policy_id: llm-body-90d
+        mappings:
+          # Nginx vars arrive as strings ("0.000", ""); numeric fields are
+          # coerced here ("" dropped via ignore_malformed).
+          properties:
+            time_iso8601:
+              type: date
+              format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+              ignore_malformed: true
+            time_local:
+              type: keyword
+            host:
+              type: keyword
+            request_id:
+              type: keyword
+            remote_addr:
+              type: keyword
+              fields:
+                ip:
+                  type: ip
+            remote_user:
+              type: keyword
+            request:
+              type: keyword
+              ignore_above: 512
+            status:
+              type: long
+              ignore_malformed: true
+            body_bytes_sent:
+              type: long
+              ignore_malformed: true
+            request_time:
+              type: double
+              ignore_malformed: true
+            http_referrer:
+              type: keyword
+              ignore_above: 512
+            http_user_agent:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 512
+            http_x_forwarded_for:
+              type: keyword
+            upstream_addr:
+              type: keyword
+            upstream_response_time:
+              type: double
+              ignore_malformed: true
+            upstream_status:
+              type: long
+              ignore_malformed: true
+            method:
+              type: keyword
+            uri:
+              type: keyword
+            request_content_type:
+              type: keyword
+            response_content_type:
+              type: keyword
+            # Parsed request payload (OpenAI-compatible chat completion):
+            model:
+              type: keyword
+            stream:
+              type: boolean
+            temperature:
+              type: double
+            top_p:
+              type: double
+            max_tokens:
+              type: long
+              ignore_malformed: true
+            frequency_penalty:
+              type: double
+            presence_penalty:
+              type: double
+            messages_count:
+              type: long
+            tools_count:
+              type: long
+            system_prompt:
+              type: text
+            user_message:
+              type: text
+            # The decoded request payload embedded as an object (the lua
+            # capture joins messages[].content part-arrays to a single string
+            # before logging, so every field below has one type).
+            request_body:
+              type: object
+              properties:
+                model:
+                  type: keyword
+                stream:
+                  type: boolean
+                temperature:
+                  type: double
+                top_p:
+                  type: double
+                max_tokens:
+                  type: long
+                frequency_penalty:
+                  type: double
+                presence_penalty:
+                  type: double
+                # stored as their JSON string by the lua capture (the shape
+                # varies per request; OpenSearch has no flattened type)
+                stop:
+                  type: text
+                response_format:
+                  type: text
+                metadata:
+                  type: text
+                messages:
+                  type: object
+                  properties:
+                    role:
+                      type: keyword
+                    name:
+                      type: keyword
+                    tool_call_id:
+                      type: keyword
+                    content:
+                      type: text
+                    reasoning_content:
+                      type: text
+                    tool_calls:
+                      type: object
+                      properties:
+                        id:
+                          type: keyword
+                        type:
+                          type: keyword
+                        function:
+                          type: object
+                          properties:
+                            name:
+                              type: keyword
+                            arguments:
+                              type: text
+                tools:
+                  type: object
+                  properties:
+                    type:
+                      type: keyword
+                    function:
+                      type: object
+                      properties:
+                        name:
+                          type: keyword
+                        description:
+                          type: text
+                        strict:
+                          type: boolean
+                        # JSON schema, stored as its JSON string by the lua
+                        # capture (shape varies per tool; full-text searchable)
+                        parameters:
+                          type: text
+            # non-JSON request payloads (parse_error) land here instead
+            request_body_raw:
+              type: text
+            request_body_bytes:
+              type: long
+              ignore_malformed: true
+            truncated:
+              type: boolean
+
+    llm_response_body_index_template:
+      index_patterns:
+        - llm-response-body-*
+      priority: 200
+      template:
+        settings:
+          index.number_of_shards: 1
+          index.number_of_replicas: 0
+          index.plugins.index_state_management.policy_id: llm-body-90d
+        mappings:
+          properties:
+            time_iso8601:
+              type: date
+              format: "yyyy-MM-dd'T'HH:mm:ssXXX"
+              ignore_malformed: true
+            time_local:
+              type: keyword
+            host:
+              type: keyword
+            request_id:
+              type: keyword
+            remote_addr:
+              type: keyword
+              fields:
+                ip:
+                  type: ip
+            remote_user:
+              type: keyword
+            request:
+              type: keyword
+              ignore_above: 512
+            status:
+              type: long
+              ignore_malformed: true
+            body_bytes_sent:
+              type: long
+              ignore_malformed: true
+            request_time:
+              type: double
+              ignore_malformed: true
+            http_referrer:
+              type: keyword
+              ignore_above: 512
+            http_user_agent:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 512
+            http_x_forwarded_for:
+              type: keyword
+            upstream_addr:
+              type: keyword
+            upstream_response_time:
+              type: double
+              ignore_malformed: true
+            upstream_status:
+              type: long
+              ignore_malformed: true
+            method:
+              type: keyword
+            uri:
+              type: keyword
+            request_content_type:
+              type: keyword
+            response_content_type:
+              type: keyword
+            # Parsed response (SSE stream or single completion JSON):
+            stream:
+              type: boolean
+            completion_id:
+              type: keyword
+            model:
+              type: keyword
+            system_fingerprint:
+              type: keyword
+            created:
+              type: long
+              ignore_malformed: true
+            finish_reason:
+              type: keyword
+            usage_prompt_tokens:
+              type: long
+              ignore_malformed: true
+            usage_completion_tokens:
+              type: long
+              ignore_malformed: true
+            usage_total_tokens:
+              type: long
+              ignore_malformed: true
+            chunk_count:
+              type: long
+              ignore_malformed: true
+            # Concatenated SSE deltas -- the final answer / thinking trace:
+            content:
+              type: text
+            reasoning_content:
+              type: text
+            error_message:
+              type: text
+              fields:
+                keyword:
+                  type: keyword
+                  ignore_above: 512
+            response_body:
+              type: text
+            response_body_bytes:
+              type: long
+              ignore_malformed: true
+            truncated:
+              type: boolean
 
     # ----------------------------------------------------------------------------
     # Ingest pipeline for llama-server slot/timing lines.
@@ -719,6 +1040,38 @@
         method: PUT
         body_format: json
         body: "{{ nginx_body_index_template | to_nice_json }}"
+        status_code: 200
+
+    - name: Get current llm-body ISM policy version
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-body-90d"
+        method: GET
+        status_code: [200, 404]
+      register: llm_body_ism_get
+      changed_when: false
+
+    - name: Create or update ISM retention policy (llm-body, delete after 90d)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-body-90d{% if llm_body_ism_get.status == 200 %}?if_seq_no={{ llm_body_ism_get.json._seq_no }}&if_primary_term={{ llm_body_ism_get.json._primary_term }}{% endif %}"
+        method: PUT
+        body_format: json
+        body: "{{ llm_body_ism_policy | to_nice_json }}"
+        status_code: [200, 201]
+
+    - name: Deploy index template (llm-request-body-*)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_index_template/llm-request-body"
+        method: PUT
+        body_format: json
+        body: "{{ llm_request_body_index_template | to_nice_json }}"
+        status_code: 200
+
+    - name: Deploy index template (llm-response-body-*)
+      ansible.builtin.uri:
+        url: "http://{{ es_ip }}:9200/_index_template/llm-response-body"
+        method: PUT
+        body_format: json
+        body: "{{ llm_response_body_index_template | to_nice_json }}"
         status_code: 200
 
     # _simulate response shape: docs[0].doc._source — same as ES 9.

@@ -366,10 +366,10 @@
               proxy_set_header Connection $connection_upgrade;
               # Tracing: hand the upstream a stable per-request id and echo
               # it (plus the serving instance) back in the response.
-              # request_id already links nginx-access-* to nginx-body-* via
-              # the same $request_id; X-Upstream exposes which llama-server
-              # instance (llm_pool round-robin) actually served the request,
-              # so it can be traced into llm-logs-* by that port.
+              # request_id already links nginx-access-* to the
+              # llm-request-body-* / llm-response-body-* captures via the
+              # same $request_id; X-Upstream exposes which llama-server
+              # instance (llm_pool round-robin) actually served the request.
               proxy_set_header X-Request-Id $request_id;
               # local add_headers disable http-context inheritance, so the
               # HSTS header must be repeated here
@@ -381,11 +381,13 @@
               proxy_read_timeout 3600s;
               proxy_send_timeout 3600s;
 
-              # Capture request + response bodies of JSON API POSTs into
-              # /var/log/nginx/bodies.log (shipped to nginx-body-* on the ELK
-              # VM). The script is phase-switched (access/body_filter/log) and
-              # pcall-guarded so a capture failure never breaks the proxy.
-              # Correlate with nginx-access-* analytics via request_id.
+              # Capture request + response bodies of JSON API POSTs, parsed
+              # into two structured lines per request (llm-request.log /
+              # llm-response.log, shipped to llm-request-body-* /
+              # llm-response-body-* on the ELK VM). The script is
+              # phase-switched (access/body_filter/log) and pcall-guarded so
+              # a capture failure never breaks the proxy. Correlate with
+              # nginx-access-* analytics via request_id.
               access_by_lua_file      /etc/nginx/lua/body-capture.lua;
               body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
               log_by_lua_file         /etc/nginx/lua/body-capture.lua;
@@ -435,43 +437,66 @@
 
       [INPUT]
           Name         tail
-          Tag          nginx-body
-          Path         /var/log/nginx/bodies.log
-          DB           /var/lib/fluent-bit/fluent-bit-body.db
+          Tag          llm-request
+          Path         /var/log/nginx/llm-request.log
+          DB           /var/lib/fluent-bit/fluent-bit-llm-request.db
           Parser       nginx_json
-          # A capture line embeds the FULL request + response body as one
-          # JSON record (single line). The default 32K tail buffer cannot
-          # hold them: Fluent Bit then logs "requires a larger buffer size,
-          # lines are too long. Skipping file." and never advances past the
-          # offending line (offset DB freezes). The lua script caps a single
-          # response at 64M (body-capture.lua MAX_ACCUM) and escaping can
-          # inflate that by ~2x, hence the 128M ceiling.
+          # A capture line embeds the FULL request body as one JSON record
+          # (single line). The default 32K tail buffer cannot hold it:
+          # Fluent Bit then logs "requires a larger buffer size, lines are
+          # too long. Skipping file." and never advances past the offending
+          # line (offset DB freezes). body-capture.lua caps a single body at
+          # 64M (MAX_ACCUM) and escaping can inflate that by ~2x, hence the
+          # 128M ceiling.
           Buffer_Chunk_Size  4M
           Buffer_Max_Size    128M
 
       [FILTER]
           Name    modify
-          Match   nginx-body
-          Set     source nginx-body
+          Match   llm-request
+          Set     source llm-request-body
 
       [OUTPUT]
           Name               opensearch
-          Match              nginx-body
+          Match              llm-request
           Host               {{ elk_ip }}
           Port               9200
-          # strftime is applied per flush → nginx-body-YYYY.MM.DD (own index
-          # template + shared 14d ISM policy on the ELK VM)
-          Index              nginx-body-%Y.%m.%d
+          # strftime is applied per flush → llm-request-body-YYYY.MM.DD (own
+          # index template + 90d ISM policy on the ELK VM)
+          Index              llm-request-body-%Y.%m.%d
           Suppress_Type_Name On
 
-    # Lua capture script for the app.llm.lan vhost (see the llm_vhost server
-    # block above). Lives in the repo as modules/nginx/files/body-capture.lua
-    # and is copied to /etc/nginx/lua/body-capture.lua; runs in three phases
-    # of each request: access (read body + decide), body_filter (accumulate
-    # response chunks, streaming included), log (write one JSON line per
-    # request).
+      [INPUT]
+          Name         tail
+          Tag          llm-response
+          Path         /var/log/nginx/llm-response.log
+          DB           /var/lib/fluent-bit/fluent-bit-llm-response.db
+          Parser       nginx_json
+          # Same oversized-line rationale as llm-request; streaming
+          # responses are the ones that actually reach the 64M cap.
+          Buffer_Chunk_Size  4M
+          Buffer_Max_Size    128M
+
+      [FILTER]
+          Name    modify
+          Match   llm-response
+          Set     source llm-response-body
+
+      [OUTPUT]
+          Name               opensearch
+          Match              llm-response
+          Host               {{ elk_ip }}
+          Port               9200
+          # strftime is applied per flush → llm-response-body-YYYY.MM.DD (own
+          # index template + 90d ISM policy on the ELK VM)
+          Index              llm-response-body-%Y.%m.%d
+          Suppress_Type_Name On
+
+    # logrotate for the two lua capture logs (see body-capture.lua): one
+    # parsed JSON line per request per file. copytruncate so nginx keeps
+    # writing to its open handle.
     logrotate_bodies_conf: |
-      /var/log/nginx/bodies.log {
+      /var/log/nginx/llm-request.log /var/log/nginx/llm-response.log {
           daily
           rotate 7
           copytruncate
@@ -702,15 +727,18 @@
         mode: "0644"
       notify: restart nginx
 
-    - name: Ensure the body capture log exists and is writable by nginx
+    - name: Ensure the body capture logs exist and are writable by nginx
       ansible.builtin.file:
-        path: /var/log/nginx/bodies.log
+        path: "{{ item }}"
         state: touch
         owner: www-data
         group: adm
         mode: "0640"
+      loop:
+        - /var/log/nginx/llm-request.log
+        - /var/log/nginx/llm-response.log
 
-    - name: Deploy logrotate for the body capture log
+    - name: Deploy logrotate for the body capture logs
       ansible.builtin.copy:
         dest: /etc/logrotate.d/nginx-bodies
         owner: root
