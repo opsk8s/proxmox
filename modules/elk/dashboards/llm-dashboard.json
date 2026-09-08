@@ -1,15 +1,16 @@
 {
   "id": "llm-observability",
   "title": "LLM Observability",
-  "description": "llama.cpp request plane: slot/timing events. Data view: LLM Logs (llm-logs-*)",
-  "data_view_id": "llm-logs-data-view",
-  "data_view_title": "LLM Logs",
-  "data_view_pattern": "llm-logs-*",
+  "description": "LLM API request/response plane, parsed by the nginx lua capture (body-capture.lua). Request view (llm-request-body-*): the OpenAI-compatible payload per POST. Response view (llm-response-body-*): the completion object per request — an SSE stream is reconstructed into the chat.completion shape, so usage tokens and content are queryable either way. Instance = upstream_addr ip:port (llama-server 8001-8004 behind app.llm.lan).",
+  "data_views": [
+    { "id": "llm-request-body-data-view", "title": "LLM Request Body", "pattern": "llm-request-body-*" },
+    { "id": "llm-response-body-data-view", "title": "LLM Response Body", "pattern": "llm-response-body-*" }
+  ],
   "panels": [
-    { "title": "Generation throughput (tokens/s)", "x": 0, "y": 0, "w": 24, "h": 10 },
-    { "title": "Completed generations", "x": 0, "y": 10, "w": 12, "h": 10 },
-    { "title": "Prompt processing (tokens/s)", "x": 12, "y": 10, "w": 12, "h": 10 },
-    { "title": "Generation throughput per instance (t/s)", "x": 0, "y": 20, "w": 12, "h": 10 },
-    { "title": "Completed generations per instance", "x": 12, "y": 20, "w": 12, "h": 10 }
+    { "title": "Token usage over time", "x": 0, "y": 0, "w": 24, "h": 10 },
+    { "title": "Requests over time", "x": 0, "y": 10, "w": 12, "h": 10 },
+    { "title": "Completed responses", "x": 12, "y": 10, "w": 12, "h": 10 },
+    { "title": "Requests per instance", "x": 0, "y": 20, "w": 12, "h": 10 },
+    { "title": "Completion tokens per instance", "x": 12, "y": 20, "w": 12, "h": 10 }
   ]
 }

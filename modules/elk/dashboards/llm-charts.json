@@ -1,74 +1,64 @@
 [
   {
-    "viz_id": "llm-gen-throughput",
-    "title": "Generation throughput (tokens/s)",
-    "description": "avg/max generation t/s from slot progress lines",
+    "viz_id": "llm-token-usage",
+    "title": "Token usage over time",
+    "description": "prompt + completion tokens per time bucket (usage fields of llm-response-body-*; streams without include_usage report no usage and count only in the request panels)",
     "chart": "line",
-    "filters": [
-      { "field": "llama.event.keyword", "value": "slot_progress" },
-      { "field": "source.keyword", "value": "llama" }
-    ],
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
     "metrics": [
-      { "type": "avg", "field": "tg_tps", "label": "avg t/s" },
-      { "type": "max", "field": "tg_tps", "label": "max t/s" }
+      { "type": "sum", "field": "usage_prompt_tokens", "label": "prompt tokens" },
+      { "type": "sum", "field": "usage_completion_tokens", "label": "completion tokens" }
     ]
   },
   {
-    "viz_id": "llm-completions",
-    "title": "Completed generations",
-    "description": "one total_time event per finished slot generation",
+    "viz_id": "llm-requests",
+    "title": "Requests over time",
+    "description": "LLM API requests captured on the nginx proxy (llm-request-body-*; one doc per POST, parsed or raw)",
     "chart": "area",
-    "filters": [
-      { "field": "llama.event.keyword", "value": "total_time" },
-      { "field": "source.keyword", "value": "llama" }
-    ],
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
     "metrics": [
-      { "type": "count", "label": "completions" }
+      { "type": "count", "label": "requests" }
     ]
   },
   {
-    "viz_id": "llm-prompt-processing",
-    "title": "Prompt processing (tokens/s)",
-    "description": "prompt prefill throughput from prompt-progress samples",
-    "chart": "line",
-    "filters": [
-      { "field": "llama.event.keyword", "value": "prompt_progress" },
-      { "field": "source.keyword", "value": "llama" }
-    ],
-    "metrics": [
-      { "type": "avg", "field": "prompt_proc_tps", "label": "avg prompt t/s" }
-    ]
-  },
-  {
-    "viz_id": "llm-throughput-instance",
-    "title": "Generation throughput per instance (t/s)",
-    "description": "avg generation t/s from slot progress lines, split by llama-server instance (upstream port)",
-    "chart": "line",
-    "filters": [
-      { "field": "llama.event.keyword", "value": "slot_progress" },
-      { "field": "source.keyword", "value": "llama" }
-    ],
-    "splits": [
-      { "field": "instance" }
-    ],
-    "metrics": [
-      { "type": "avg", "field": "tg_tps", "label": "avg t/s" }
-    ]
-  },
-  {
-    "viz_id": "llm-completions-instance",
-    "title": "Completed generations per instance",
-    "description": "one total_time event per finished generation, split by llama-server instance (upstream port)",
+    "viz_id": "llm-responses",
+    "title": "Completed responses",
+    "description": "response docs in llm-response-body-* — one per proxied request (completion object as-is, or the SSE stream reconstructed into the chat.completion shape)",
     "chart": "area",
-    "filters": [
-      { "field": "llama.event.keyword", "value": "total_time" },
-      { "field": "source.keyword", "value": "llama" }
-    ],
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "responses" }
+    ]
+  },
+  {
+    "viz_id": "llm-requests-instance",
+    "title": "Requests per instance",
+    "description": "LLM API requests per upstream instance (upstream_addr ip:port; the port is the llama-server instance serving it)",
+    "chart": "area",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
     "splits": [
-      { "field": "instance" }
+      { "field": "upstream_addr" }
     ],
     "metrics": [
-      { "type": "count", "label": "completions" }
+      { "type": "count", "label": "requests" }
+    ]
+  },
+  {
+    "viz_id": "llm-tokens-instance",
+    "title": "Completion tokens per instance",
+    "description": "completion tokens generated per upstream instance (upstream_addr ip:port = the llama-server instance)",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "splits": [
+      { "field": "upstream_addr" }
+    ],
+    "metrics": [
+      { "type": "sum", "field": "usage_completion_tokens", "label": "completion tokens" }
     ]
   }
 ]
