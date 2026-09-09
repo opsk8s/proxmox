@@ -1,0 +1,15 @@
+{
+  "id": "query-insights",
+  "title": "Query Insights",
+  "description": "OpenSearch Query Insights (Top-N queries by latency). The top_queries-* indices are written by the query-insights plugin: each doc is one sampled query carrying its latency (measurements.latency.number, ms), CPU (measurements.cpu.number, ns) and memory (measurements.memory.number, bytes) plus the target indices and per-phase timings. Sampled top-N only — not the full query stream, so volume numbers are the sampler's capture count, not total cluster queries.",
+  "data_view_id": "query-insights-data-view",
+  "data_view_title": "Query Insights",
+  "data_view_pattern": "top_queries-*",
+  "time_field": "timestamp",
+  "panels": [
+    { "title": "Sampled queries", "x": 0, "y": 0, "w": 8, "h": 6 },
+    { "title": "Avg latency (ms)", "x": 8, "y": 0, "w": 8, "h": 6 },
+    { "title": "Max latency (ms)", "x": 16, "y": 0, "w": 8, "h": 6 },
+    { "title": "Slowest indices", "x": 0, "y": 6, "w": 24, "h": 12 }
+  ]
+}

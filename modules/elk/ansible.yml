@@ -37,70 +37,15 @@
     ansible_python_interpreter: /usr/bin/python3
     # es_ip: terraform passes it via extra_vars (proxmox.tfvars)
 
-    # Indices: llm-logs-YYYY.MM.dd (LLM log shipping removed 2026-09-08 —
-    # no new indices will appear; existing ones age out under the policy).
-    # 14-day retention, then delete.
-    # OpenSearch 2.x has NO ES-style ILM API (the /_ilm handlers do not
-    # exist in the 2.19 index-management plugin) — retention is done with
-    # ISM policies under /_plugins/_ism. The index template attaches the
-    # policy via index.plugins.index_state_management.policy_id; ISM's
-    # coordinator sweep manages new matching indices within ~5-10m.
-    # Semantics match the ES 9 stack this replaces: hot immediately,
-    # delete once the index is 14 days old.
-    llm_ism_policy:
-      policy:
-        description: llm-logs 14-day retention (was ES 9 ILM policy)
-        default_state: hot
-        # auto-manage any NEW index matching the pattern on the next
-        # coordinator sweep (deterministic, vs. relying on the settings
-        # policy_id scan); combined with the template setting below
-        ism_template:
-          index_patterns:
-            - llm-logs-*
-        states:
-          - name: hot
-            actions: []
-            transitions:
-              - state_name: delete
-                conditions:
-                  min_index_age: 14d
-          - name: delete
-            actions:
-              - delete: {}
-            transitions: []
-
-    index_template:
-      index_patterns:
-        - llm-logs-*
-      priority: 200
-      template:
-        settings:
-          index.number_of_shards: 1
-          index.number_of_replicas: 0
-          index.plugins.index_state_management.policy_id: llm-logs-14d
-          # every doc goes through the parser; the grok processors are
-          # guarded and no-op on non-matching lines
-          index.default_pipeline: llama-logs
-        mappings:
-          # 'instance' is the llama-server port (8001-8004), added by the
-          # per-port Fluent Bit filters on the LLM VM (LLM log shipping
-          # removed 2026-09-08). It was the join key with nginx-access
-          # upstream_addr (the llm_pool round-robin target).
-          properties:
-            instance:
-              type: keyword
-
     # Indices: Fluent Bit on the nginx VM ships the JSON access log into
-    # nginx-access-YYYY.MM.dd and the captured request/response bodies of the
-    # LLM API into nginx-body-YYYY.MM.dd (see modules/nginx/ansible.yml).
+    # nginx-access-YYYY.MM.dd (see modules/nginx/ansible.yml).
     nginx_ism_policy:
       policy:
-        description: nginx access/body 14-day retention (was ES 9 ILM policy)
+        description: nginx access 14-day retention (was ES 9 ILM policy)
         default_state: hot
         ism_template:
           index_patterns:
             - nginx-access-*
-            - nginx-body-*
         states:
           - name: hot
             actions: []
@@ -140,61 +85,6 @@
             upstream_response_time:
               type: double
               ignore_malformed: true
-
-    # Request/response bodies captured by the lua module on the nginx proxy
-    # for LLM JSON API calls (modules/nginx/ansible.yml). request_id matches
-    # the nginx-access-* analytics record of the same proxied request. The
-    # bodies are mapped as full-text (searchable) without keyword subfields,
-    # so multi-MB payloads are not duplicated in an unindexed keyword copy.
-    #
-    # nginx-body-* shipping was REPLACED 2026-09-08 by the parsed
-    # llm-request-body-* / llm-response-body-* indices (templates below);
-    # this template + the ISM entry stay so existing nginx-body-* indices
-    # keep aging out under the 14d policy.
-    nginx_body_index_template:
-      index_patterns:
-        - nginx-body-*
-      priority: 200
-      template:
-        settings:
-          index.number_of_shards: 1
-          index.number_of_replicas: 0
-          index.plugins.index_state_management.policy_id: nginx-access-14d
-        mappings:
-          properties:
-            status:
-              type: long
-              ignore_malformed: true
-            request_body_bytes:
-              type: long
-              ignore_malformed: true
-            response_body_bytes:
-              type: long
-              ignore_malformed: true
-            request_id:
-              type: keyword
-            method:
-              type: keyword
-            # which llama-server instance (ip:port) served the request —
-            # recorded by body-capture.lua, matches nginx-access upstream_addr
-            upstream_addr:
-              type: keyword
-            host:
-              type: text
-              fields:
-                keyword:
-                  type: keyword
-                  ignore_above: 256
-            uri:
-              type: text
-              fields:
-                keyword:
-                  type: keyword
-                  ignore_above: 256
-            request_body:
-              type: text
-            response_body:
-              type: text
 
     # Parsed LLM request/response body indices. The lua capture on the nginx
     # proxy (modules/nginx/files/body-capture.lua) parses every LLM API POST
@@ -570,233 +460,6 @@
             truncated:
               type: boolean
 
-    # ----------------------------------------------------------------------------
-    # Ingest pipeline for llama-server slot/timing lines.
-    #
-    # Verified against the real build (llama.cpp master, 2026): one event per
-    # line, e.g.
-    #   25.45.408.998 I slot print_timing: id  0 | task 8368 | prompt eval time =    5724.56 ms /  5048 tokens (    1.13 ms per token,   881.81 tokens per second)
-    #   25.45.411.596 I slot      release: id  0 | task 8368 | stop processing: n_tokens = 87682, truncated = 0
-    #
-    # The leading D.SS.mmm.mmm clock is RELATIVE (process uptime), so Filebeat's
-    # @timestamp (read time) is the correct event time — log_clock is only kept
-    # as a string for in-log ordering.
-    #
-    # The pipeline body is verbatim from the ES 9 stack — grok / script
-    # (painless) / convert are API-compatible, so nothing needed to change.
-    # ----------------------------------------------------------------------------
-    llama_pipeline:
-      description: Parse llama-server slot/timing log lines into structured fields
-      processors:
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*n_gen =\s+(?<n_gen>\d+), tg =\s+(?<tg_tps>[\d.]+) t/s, tg_3s =\s+(?<tg3s_tps>[\d.]+) t/s'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*prompt eval time =\s+(?<prompt_eval_ms>[\d.]+) ms / +(?<prompt_tokens>\d+) tokens \(\s+(?<prompt_ms_per_token>[\d.]+) ms per token,\s+(?<prompt_tps>[\d.]+) tokens per second\)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+eval time =\s+(?<eval_ms>[\d.]+) ms / +(?<gen_tokens>\d+) tokens \(\s+(?<gen_ms_per_token>[\d.]+) ms per token,\s+(?<gen_tps>[\d.]+) tokens per second\)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+total time =\s+(?<total_ms>[\d.]+) ms / +(?<total_tokens>\d+) tokens'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+graphs reused = +(?<graphs_reused>\d+)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+draft acceptance = +(?<draft_acceptance>[\d.]+) \(\s*(?<draft_accepted>\d+) accepted / +(?<draft_generated>\d+) generated\), mean len = +(?<draft_mean_len>[\d.]+)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+print_timing:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s+prompt processing, n_tokens = +(?<prompt_proc_tokens>\d+), progress = +(?<progress>[\d.]+), t = +(?<prompt_proc_s>[\d.]+) s / +(?<prompt_proc_tps>[\d.]+) tokens per second'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+release:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*stop processing: n_tokens = +(?<n_tokens>\d+), truncated = +(?<truncated>\d+)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+launch_slot_:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)\s*\|\s*processing task, is_child = +(?<is_child>\d+)'
-            ignore_failure: true
-        - grok:
-            field: message
-            patterns:
-              - '(?<log_clock>\d{2}\.\d{2}\.\d{3}\.\d{3})\sI\s+slot\s+get_availabl:\s+id\s+(?<slot_id>\d+)\s*\|\s*task\s+(?<task_id>-?\d+)'
-            ignore_failure: true
-        - script:
-            source: |
-              if (ctx.containsKey('n_gen')) {
-                ctx.llama = ['event': 'slot_progress'];
-              } else if (ctx.containsKey('prompt_eval_ms')) {
-                ctx.llama = ['event': 'prompt_eval'];
-              } else if (ctx.containsKey('eval_ms')) {
-                ctx.llama = ['event': 'generation'];
-              } else if (ctx.containsKey('total_ms')) {
-                ctx.llama = ['event': 'total_time'];
-              } else if (ctx.containsKey('graphs_reused')) {
-                ctx.llama = ['event': 'graphs_reused'];
-              } else if (ctx.containsKey('draft_acceptance')) {
-                ctx.llama = ['event': 'draft_acceptance'];
-              } else if (ctx.containsKey('prompt_proc_tokens')) {
-                ctx.llama = ['event': 'prompt_progress'];
-              } else if (ctx.containsKey('truncated')) {
-                ctx.llama = ['event': 'slot_release'];
-              } else if (ctx.containsKey('is_child')) {
-                ctx.llama = ['event': 'slot_launch'];
-              } else if (ctx.message != null && ctx.message.indexOf('get_availabl') != -1) {
-                ctx.llama = ['event': 'slot_select'];
-              }
-        - convert:
-            field: slot_id
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: task_id
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: n_gen
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_tokens
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: gen_tokens
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: total_tokens
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: graphs_reused
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: draft_accepted
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: draft_generated
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: n_tokens
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: truncated
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: is_child
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_proc_tokens
-            type: integer
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: tg_tps
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: tg3s_tps
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_eval_ms
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_ms_per_token
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_tps
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: eval_ms
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: gen_ms_per_token
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: gen_tps
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: total_ms
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: draft_acceptance
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: draft_mean_len
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: progress
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_proc_s
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-        - convert:
-            field: prompt_proc_tps
-            type: double
-            ignore_failure: true
-            ignore_missing: true
-
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -1031,43 +694,11 @@
       delay: 10
       changed_when: false
 
-    # --- Server-side ingest resources (policy adapted to OpenSearch ISM;
-    #     templates and pipeline bodies verbatim from the ES 9 stack) ------
+    # --- Server-side ingest resources (retention policies adapted to
+    #     OpenSearch ISM; index templates verbatim from the ES 9 stack) ------
     # ISM policy PUTs are optimistic-concurrency: a plain PUT conflicts
     # (409) once the policy exists, and ?if_seq_no/if_primary_term fail on
     # first create — hence GET-then-PUT for idempotency.
-    - name: Get current llm-logs ISM policy version
-      ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-logs-14d"
-        method: GET
-        status_code: [200, 404]
-      register: llm_ism_get
-      changed_when: false
-
-    - name: Create or update ISM retention policy (llm-logs, delete after 14d)
-      ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/llm-logs-14d{% if llm_ism_get.status == 200 %}?if_seq_no={{ llm_ism_get.json._seq_no }}&if_primary_term={{ llm_ism_get.json._primary_term }}{% endif %}"
-        method: PUT
-        body_format: json
-        body: "{{ llm_ism_policy | to_nice_json }}"
-        status_code: [200, 201]
-
-    - name: Deploy index template (llm-logs-*)
-      ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_index_template/llm-logs"
-        method: PUT
-        body_format: json
-        body: "{{ index_template | to_nice_json }}"
-        status_code: 200
-
-    - name: Deploy llama log ingest pipeline
-      ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_ingest/pipeline/llama-logs"
-        method: PUT
-        body_format: json
-        body: "{{ llama_pipeline | to_nice_json }}"
-        status_code: 200
-
     - name: Get current nginx-access ISM policy version
       ansible.builtin.uri:
         url: "http://{{ es_ip }}:9200/_plugins/_ism/policies/nginx-access-14d"
@@ -1090,14 +721,6 @@
         method: PUT
         body_format: json
         body: "{{ nginx_index_template | to_nice_json }}"
-        status_code: 200
-
-    - name: Deploy nginx index template (nginx-body-*)
-      ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_index_template/nginx-body"
-        method: PUT
-        body_format: json
-        body: "{{ nginx_body_index_template | to_nice_json }}"
         status_code: 200
 
     - name: Get current llm-body ISM policy version
@@ -1132,19 +755,20 @@
         body: "{{ llm_response_body_index_template | to_nice_json }}"
         status_code: 200
 
-    # _simulate response shape: docs[0].doc._source — same as ES 9.
-    - name: Sanity-check pipeline against a real slot log line
+    # Retired resources from the old llm-logs / nginx-body pipelines: no
+    # shipper writes to them anymore (llm-logs collected llama-server slot
+    # lines; nginx-body was replaced by the parsed request/response body
+    # indices), so they are removed here — idempotent (404 = already gone).
+    - name: Delete retired llm-logs / nginx-body index resources
       ansible.builtin.uri:
-        url: "http://{{ es_ip }}:9200/_ingest/pipeline/llama-logs/_simulate"
-        method: POST
-        body_format: json
-        body: '{"docs":[{"_source":{"message":"25.45.408.998 I slot print_timing: id  0 | task 8368 | prompt eval time =    5724.56 ms /  5048 tokens (    1.13 ms per token,   881.81 tokens per second)"}}]}'
-        status_code: 200
-      register: pipeline_sim
-      failed_when: >-
-        pipeline_sim.status != 200
-        or pipeline_sim.json.docs[0].doc._source.get('llama', {}).get('event') != 'prompt_eval'
-        or pipeline_sim.json.docs[0].doc._source.get('prompt_tokens') != 5048
+        url: "http://{{ es_ip }}:9200{{ item }}"
+        method: DELETE
+        status_code: [200, 404]
+      loop:
+        - /_plugins/_ism/policies/llm-logs-14d
+        - /_index_template/llm-logs
+        - /_ingest/pipeline/llama-logs
+        - /_index_template/nginx-body
       changed_when: false
 
     # --- OpenSearch Dashboards --------------------------------------------------
@@ -1225,7 +849,7 @@
       loop:
         - llm-dashboards.ndjson
         - nginx-dashboards.ndjson
-        - request-flow-dashboards.ndjson
+        - query-insights-dashboards.ndjson
         - llm-body-observability.ndjson
 
     - name: Import LLM Observability objects (data view, charts, dashboard)
@@ -1286,21 +910,25 @@
           - "{{ nginx_import.stdout }}"
       changed_when: false
 
-    - name: Import Request Flow (LLM) objects (data views, charts, dashboard)
+    # OpenSearch Query Insights (Top-N queries by latency). The top_queries-*
+    # indices are written by the query-insights plugin; the dashboard shows
+    # sampled-query volume and latency, plus which indices the slowest
+    # queries target.
+    - name: Import Query Insights objects (data view, charts, dashboard)
       ansible.builtin.command:
         argv:
           - curl
           - --fail
           - --silent
           - -F
-          - "file=@/usr/local/share/ods-llm-content/request-flow-dashboards.ndjson"
+          - "file=@/usr/local/share/ods-llm-content/query-insights-dashboards.ndjson"
           - -H
           - "osd-xsrf: true"
           - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
-      register: flow_import
+      register: qi_import
       changed_when: true
 
-    - name: Assert all Request Flow objects imported without failure
+    - name: Assert all Query Insights objects imported without failure
       ansible.builtin.command:
         argv:
           - python3
@@ -1312,7 +940,7 @@
             ok = r.get("successCount", r.get("succeeded", 0));
             print("imported ok=%s failed=%s" % (ok, failed));
             sys.exit(1 if failed else 0)
-          - "{{ flow_import.stdout }}"
+          - "{{ qi_import.stdout }}"
       changed_when: false
 
     # LLM body observability: two new dashboards (LLM Body Metrics, LLM Request
@@ -1350,6 +978,29 @@
           - "{{ llmbody_import.stdout }}"
       changed_when: false
 
+    # Stale objects from the removed Request Flow dashboard (its nginx-body-*
+    # and llm-logs-* data views no longer exist). Import overwrite only
+    # replaces objects — it never deletes — so these are removed explicitly
+    # and idempotently (404 = already gone).
+    - name: Delete stale Request Flow saved objects
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/saved_objects/{{ item.type }}/{{ item.id }}"
+        method: DELETE
+        headers:
+          osd-xsrf: "true"
+        status_code: [200, 404]
+      loop:
+        - { type: dashboard, id: request-flow-llm }
+        - { type: index-pattern, id: nginx-body-data-view }
+        - { type: index-pattern, id: llm-logs-data-view }
+        - { type: visualization, id: flow-requests-instance }
+        - { type: visualization, id: flow-latency-instance }
+        - { type: visualization, id: flow-errors-5xx }
+        - { type: visualization, id: flow-body-bytes }
+        - { type: visualization, id: flow-completions-instance }
+        - { type: visualization, id: flow-throughput-instance }
+      changed_when: false
+
     # End-to-end check that the import actually landed all dashboards.
     - name: Verify all dashboards exist
       ansible.builtin.uri:
@@ -1361,7 +1012,7 @@
     - name: Assert all five dashboards are present
       ansible.builtin.assert:
         that:
-          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics", "request-flow-llm", "llm-body-metrics", "llm-body-traces"]) | list | length) == 5
+          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics", "query-insights", "llm-body-metrics", "llm-body-traces"]) | list | length) == 5
         fail_msg: Dashboards missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.
 
     - name: Verify LLM Body Discover search exists

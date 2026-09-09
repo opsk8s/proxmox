@@ -5,11 +5,11 @@ definitions next to it.
 Inputs (committed):
     <stack>-dashboard.json                     - dashboard layout + data views
     <stack>-charts.json                        - chart definitions
-        (llm, nginx, request-flow, llm-body-metrics, llm-body-traces)
+        (llm, nginx, query-insights, llm-body-metrics, llm-body-traces)
     llm-body-logs.json                         - data views + Discover search
 Outputs (committed, imported by the playbook):
     llm-dashboards.ndjson / nginx-dashboards.ndjson
-    request-flow-dashboards.ndjson
+    query-insights-dashboards.ndjson
     llm-body-observability.ndjson
         one saved object per line: data views, charts, dashboards, search
 
@@ -63,9 +63,9 @@ def _search_source(data_view_id: str, filters: list) -> str:
 
 
 def data_views_of(dash: dict) -> list:
-    # A dashboard may span several data views (the Request Flow dashboard
-    # joins nginx access + nginx body + llama logs). Default: the single
-    # data view defined on the dashboard itself.
+    # A dashboard may span several data views (e.g. LLM Body Metrics joins
+    # the combined body view with the per-side request/response views).
+    # Default: the single data view defined on the dashboard itself.
     dvs = dash.get("data_views")
     if dvs is None:
         dvs = [
@@ -73,6 +73,7 @@ def data_views_of(dash: dict) -> list:
                 "id": dash["data_view_id"],
                 "title": dash["data_view_title"],
                 "pattern": dash["data_view_pattern"],
+                "time_field": dash.get("time_field", "@timestamp"),
             }
         ]
     return dvs
@@ -89,7 +90,7 @@ def data_view_object(dv: dict) -> dict:
         "attributes": {
             "title": dv["pattern"],
             "name": dv["title"],
-            "timeFieldName": "@timestamp",
+            "timeFieldName": dv.get("time_field", "@timestamp"),
             "fields": "[]",
             "fieldFormats": "{}",
         },
@@ -260,7 +261,7 @@ def _vislib_vis_state(chart: dict) -> dict:
 
 def visualization_object(dash: dict, chart: dict) -> dict:
     # A chart may target a data view other than the dashboard's default
-    # (multi-data-view dashboards like Request Flow).
+    # (multi-data-view dashboards like LLM Body Metrics).
     dv_id = chart.get("data_view") or dash.get("data_view_id")
     return {
         "attributes": {
@@ -383,7 +384,7 @@ def main() -> None:
     for dash_name, charts_name, out_name in [
         ("llm-dashboard.json", "llm-charts.json", "llm-dashboards.ndjson"),
         ("nginx-dashboard.json", "nginx-charts.json", "nginx-dashboards.ndjson"),
-        ("request-flow-dashboard.json", "request-flow-charts.json", "request-flow-dashboards.ndjson"),
+        ("query-insights-dashboard.json", "query-insights-charts.json", "query-insights-dashboards.ndjson"),
     ]:
         dash = json.loads((HERE / dash_name).read_text(encoding="utf-8"))
         charts = json.loads((HERE / charts_name).read_text(encoding="utf-8"))

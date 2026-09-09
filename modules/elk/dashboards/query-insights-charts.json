@@ -1,0 +1,43 @@
+[
+  {
+    "viz_id": "qi-sampled",
+    "title": "Sampled queries",
+    "description": "queries captured by the query-insights Top-N (latency) sampler in the time range",
+    "chart": "metric",
+    "metrics": [
+      { "type": "count", "label": "queries" }
+    ]
+  },
+  {
+    "viz_id": "qi-avg-latency",
+    "title": "Avg latency (ms)",
+    "description": "mean query latency across the sampled top-N queries (measurements.latency.number)",
+    "chart": "metric",
+    "metrics": [
+      { "type": "avg", "field": "measurements.latency.number", "label": "avg ms" }
+    ]
+  },
+  {
+    "viz_id": "qi-max-latency",
+    "title": "Max latency (ms)",
+    "description": "peak query latency across the sampled top-N queries",
+    "chart": "metric",
+    "metrics": [
+      { "type": "max", "field": "measurements.latency.number", "label": "max ms" }
+    ]
+  },
+  {
+    "viz_id": "qi-slowest-indices",
+    "title": "Slowest indices",
+    "description": "which indices the sampled queries target, ordered by capture count, with avg/max latency per index (measurements.latency.number)",
+    "chart": "table",
+    "splits": [
+      { "field": "indices.keyword", "size": 20 }
+    ],
+    "metrics": [
+      { "type": "count", "label": "queries" },
+      { "type": "avg", "field": "measurements.latency.number", "label": "avg ms" },
+      { "type": "max", "field": "measurements.latency.number", "label": "max ms" }
+    ]
+  }
+]
