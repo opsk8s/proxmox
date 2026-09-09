@@ -191,7 +191,7 @@
       WorkingDirectory={{ taiga_root }}/taiga-back
       EnvironmentFile={{ taiga_root }}/.env
       Environment=PYTHONUNBUFFERED=1
-      ExecStart={{ taiga_root }}/venv-back/bin/gunicorn taiga.wsgi:application --name taiga_api --bind 0.0.0.0:8000 --workers 3 --worker-tmp-dir /dev/shm --log-level=info --access-logfile -
+      ExecStart={{ taiga_root }}/venv-back/bin/gunicorn taiga.wsgi:application --name taiga_api --bind 0.0.0.0:8000 --workers 3 --worker-tmp-dir {{ taiga_root }}/.gunicorn-back --log-level=info --access-logfile -
       Restart=on-failure
       RestartSec=5
 
@@ -226,7 +226,7 @@
       User=taiga
       Group=taiga
       WorkingDirectory={{ taiga_root }}/taiga-protected
-      ExecStart={{ taiga_root }}/venv-protected/bin/gunicorn server:app --name taiga_protected --bind 0.0.0.0:8003 --workers 4 --worker-tmp-dir /dev/shm --max-requests 3600 --max-requests-jitter 360 --timeout 60
+      ExecStart={{ taiga_root }}/venv-protected/bin/gunicorn server:app --name taiga_protected --bind 0.0.0.0:8003 --workers 4 --worker-tmp-dir {{ taiga_root }}/.gunicorn-protected --max-requests 3600 --max-requests-jitter 360 --timeout 60
       Restart=on-failure
       RestartSec=5
 
@@ -611,6 +611,19 @@
         executable: /bin/bash
 
     # --- services ---------------------------------------------------------------------------------
+    # gunicorn requires --worker-tmp-dir to pre-exist (it does not create it).
+    # Under the deployment root so systemd-tmpfiles never touches it.
+    - name: Create gunicorn worker-tmp directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: taiga
+        group: taiga
+        mode: "0755"
+      loop:
+        - "{{ taiga_root }}/.gunicorn-back"
+        - "{{ taiga_root }}/.gunicorn-protected"
+
     - name: Deploy the taiga systemd units
       ansible.builtin.copy:
         dest: "/etc/systemd/system/{{ item.name }}"

@@ -8,8 +8,9 @@
   vars:
     ansible_python_interpreter: /usr/bin/python3
     # terraform passes the values via ansible_playbook_run extra_vars
-    # (grafana_admin_password + all VM IPs, from proxmox.tfvars)
+    # (grafana_admin_password, jenkins_admin_password + all VM IPs, from proxmox.tfvars)
     grafana_admin_password: ""
+    jenkins_admin_password: ""
 
     blackbox_version: "0.28.0"
     blackbox_url: "https://github.com/prometheus/blackbox_exporter/releases/download/v{{ blackbox_version }}/blackbox_exporter-{{ blackbox_version }}.linux-amd64.tar.gz"
@@ -62,9 +63,14 @@
             - targets: ["{{ postgres_ip }}:9187"]
               labels: {instance_name: "postgres"}
 
-        # Jenkins prometheus plugin default endpoint (trailing slash required)
+        # Jenkins prometheus plugin default endpoint (trailing slash required).
+        # basic_auth: Jenkins runs with allowAnonymousRead: false, so the
+        # /prometheus/ endpoint rejects unauthenticated scrapes with 401.
         - job_name: jenkins
           metrics_path: /prometheus/
+          basic_auth:
+            username: admin
+            password: "{{ jenkins_admin_password }}"
           static_configs:
             - targets: ["{{ jenkins_ip }}:8080"]
               labels: {instance_name: "jenkins-server"}
@@ -82,7 +88,7 @@
             # default_server on the proxy answers 200 "nginx proxy alive"
             - targets: ["http://{{ nginx_ip }}:80/"]
               labels: {instance_name: "nginx"}
-            - targets: ["http://{{ taiga_ip }}:9000/"]
+            - targets: ["http://{{ taiga_ip }}:8080/"]
               labels: {instance_name: "taiga"}
           relabel_configs:
             - source_labels: [__address__]

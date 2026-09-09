@@ -100,6 +100,7 @@ action "ansible_playbook_run" "configure_monitoring" {
       dns_ip                 = var.dns_ip
       llm_ip                 = var.llm_ip
       jenkins_ip             = var.jenkins_ip
+      jenkins_admin_password = var.jenkins_admin_password
       jenkins_agent_ip       = var.jenkins_agent_ip
       open_webui_ip          = var.open_webui_ip
       postgres_ip            = var.postgres_ip

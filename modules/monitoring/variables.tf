@@ -75,6 +75,10 @@ variable "grafana_admin_password" {
   type = string
 }
 
+variable "jenkins_admin_password" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

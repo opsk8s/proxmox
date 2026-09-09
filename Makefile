@@ -76,6 +76,7 @@ deploy-taiga:
 deploy-monitoring:
 	$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini modules/monitoring/ansible.yml \
 		--extra-vars "grafana_admin_password=$(call tfvar,grafana_admin_password) \
+		jenkins_admin_password=$(call tfvar,jenkins_admin_password) \
 		ansible_host=$(call tfvar,monitoring_ip) \
 		dns_ip=$(call tfvar,dns_ip) \
 		llm_ip=$(call tfvar,llm_ip) \
