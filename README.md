@@ -1,5 +1,10 @@
 # Proxmox Server
 
+Refreshing local cache on osx
+```
+sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder
+```
+
 Infrastructure-as-code (Terraform + Ansible) for a home Proxmox server.
 Each service runs natively on its own Ubuntu VM and is reached through the
 central nginx reverse proxy under private `*.lan` DNS names (see
@@ -203,3 +208,12 @@ echo | openssl s_client -connect app.taiga.lan:443 -servername app.taiga.lan 2>/
 
 Plain `http://` names should `301` to their `https://` counterpart, and every
 HTTPS response should include `Strict-Transport-Security: max-age=31536000`.
+
+
+## Deploying via make after infrastructure is deployed
+eg. check @Makefile
+```
+make deploy-all
+make deploy-exporters
+make deploy-exporter HOST=jenkins
+```

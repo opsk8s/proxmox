@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters
+.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
@@ -145,3 +145,11 @@ deploy-exporters:
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \
 	done
+
+# Deploy exporters on a single host: make deploy-exporter HOST=taiga
+deploy-exporter:
+	@test -n "$(HOST)" || (echo "Usage: make deploy-exporter HOST=<group>" && exit 1)
+	@host_var=$$(echo "$(HOST)" | tr '-' '_'); \
+	ip=$$(grep -E "^$${host_var}_ip[[:space:]]*=" $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/'); \
+	$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$(HOST)" modules/monitoring/exporters.yml \
+		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"
