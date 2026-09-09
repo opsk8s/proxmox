@@ -53,6 +53,8 @@
               labels: {instance_name: "taiga"}
             - targets: ["{{ git_ip }}:9100"]
               labels: {instance_name: "git"}
+            - targets: ["{{ qdrant_ip }}:9100"]
+              labels: {instance_name: "qdrant"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -64,6 +66,15 @@
           static_configs:
             - targets: ["{{ postgres_ip }}:9187"]
               labels: {instance_name: "postgres"}
+
+        # Qdrant: dedicated unauthenticated metrics server (service.metrics_port).
+        # The REST port's /metrics requires the api-key header, so we scrape
+        # the :6335 server instead — no credentials in this file.
+        - job_name: qdrant
+          metrics_path: /metrics
+          static_configs:
+            - targets: ["{{ qdrant_ip }}:6335"]
+              labels: {instance_name: "qdrant"}
 
         # Jenkins prometheus plugin default endpoint (trailing slash required).
         # basic_auth: Jenkins runs with allowAnonymousRead: false, so the

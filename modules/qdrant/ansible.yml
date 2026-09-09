@@ -1,0 +1,295 @@
+---
+# Qdrant — vector database (embeddings, RAG, semantic search).
+# Runs as the `qdrant` user (cloud-init) on :6333 (REST + web UI),
+# :6334 (gRPC, LAN-direct only — the nginx in this repo does no grpc_pass)
+# and :6335 (dedicated metrics server).
+# Public access is via app.qdrant.lan (nginx reverse proxy, TLS); every API
+# call requires the shared api-key header (qdrant_api_key, proxmox.tfvars).
+# /metrics on :6333 sits behind the same api-key auth (not whitelisted),
+# so the monitoring module scrapes the dedicated :6335/metrics server
+# instead — it has no auth middleware by design.
+# The web dashboard lives at /dashboard: the binary release tarball ships NO
+# UI assets (separate qdrant-web-ui release, installed below into /qdrant/
+# static, qdrant's default static_content_dir). /dashboard* is whitelisted
+# from api-key auth so the page loads, but its API calls need the key, which
+# you enter in the dashboard's login screen.
+- name: Install and configure Qdrant
+  hosts: qdrant
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    qdrant_user: qdrant
+    qdrant_root: /qdrant
+    qdrant_version: "1.19.1"
+    qdrant_url: "https://github.com/qdrant/qdrant/releases/download/v{{ qdrant_version }}/qdrant-x86_64-unknown-linux-gnu.tar.gz"
+    qdrant_checksum: "sha256:eef986e769d4d3e806dd2d546e1b4ecdd416211e54d34b4ed764fac7c58e1085"
+    # Web UI is versioned independently of the server (qdrant-web-ui repo);
+    # the REST API is the stable contract, so pinning the latest v0.2.x is safe.
+    qdrant_webui_version: "0.2.18"
+    qdrant_webui_url: "https://github.com/qdrant/qdrant-web-ui/releases/download/v{{ qdrant_webui_version }}/dist-qdrant.zip"
+    qdrant_port: 6333
+    # Dedicated, unauthenticated metrics server (service.metrics_port).
+    qdrant_metrics_port: 6335
+    # qdrant_api_key: terraform / Makefile pass it via extra_vars (proxmox.tfvars)
+    qdrant_api_key: ""
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 150
+        delay: 5
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Fail early when qdrant_api_key is not provided
+      ansible.builtin.fail:
+        msg: "Pass qdrant_api_key via extra_vars (proxmox.tfvars)"
+      when: qdrant_api_key | length == 0
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: qdrant
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+          - unzip
+        state: present
+
+    # --- Qdrant binary ---------------------------------------------------------
+    # Pinned version + checksum; bump both to upgrade. The release tarball
+    # contains a single self-contained binary (no apt repo exists for qdrant).
+    - name: Check if Qdrant is already installed at the target version
+      ansible.builtin.command:
+        cmd: /usr/local/bin/qdrant --version
+      register: qdrant_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Download Qdrant tarball (pinned version, checksum-verified)
+      ansible.builtin.get_url:
+        url: "{{ qdrant_url }}"
+        dest: /tmp/qdrant.tar.gz
+        checksum: "{{ qdrant_checksum }}"
+      when: qdrant_installed.rc != 0 or qdrant_version not in qdrant_installed.stdout
+
+    - name: Install the Qdrant binary
+      ansible.builtin.unarchive:
+        src: /tmp/qdrant.tar.gz
+        dest: /usr/local/bin
+        remote_src: true
+        include: [qdrant]
+        mode: "0755"
+      when: qdrant_installed.rc != 0 or qdrant_version not in qdrant_installed.stdout
+
+    - name: Remove the tarball
+      ansible.builtin.file:
+        path: /tmp/qdrant.tar.gz
+        state: absent
+      when: qdrant_installed.rc != 0 or qdrant_version not in qdrant_installed.stdout
+
+    # --- Data directory + config --------------------------------------------------
+    - name: Create the Qdrant data directory
+      ansible.builtin.file:
+        path: "{{ qdrant_root }}/storage"
+        state: directory
+        owner: "{{ qdrant_user }}"
+        group: "{{ qdrant_user }}"
+        mode: "0750"
+
+    - name: Create the Qdrant config directory
+      ansible.builtin.file:
+        path: /etc/qdrant
+        state: directory
+        owner: root
+        group: "{{ qdrant_user }}"
+        mode: "0750"
+
+    # The API key is deliberately NOT in this file — it arrives as the
+    # QDRANT__SERVICE__API_KEY env on the systemd unit.
+    - name: Write the Qdrant config
+      ansible.builtin.copy:
+        dest: /etc/qdrant/config.yaml
+        owner: root
+        group: "{{ qdrant_user }}"
+        mode: "0640"
+        content: |
+          # Managed by Ansible.
+          service:
+            host: 0.0.0.0
+            http_port: {{ qdrant_port }}
+            grpc_port: 6334
+            # Dedicated unauthenticated /metrics server for Prometheus
+            # (the :6333/metrics endpoint requires the api-key header).
+            metrics_port: {{ qdrant_metrics_port }}
+
+          storage:
+            storage_path: {{ qdrant_root }}/storage
+            on_disk: false
+
+    # --- Web UI (static dashboard) ------------------------------------------------
+    # The release tarball contains only the binary; the dashboard assets come
+    # from the separate qdrant-web-ui release. Qdrant serves them from
+    # <working-dir>/static (service.static_content_dir defaults to ./static,
+    # and WorkingDirectory below is /qdrant). The .version marker makes the
+    # block re-run when qdrant_webui_version is bumped.
+    - name: Check the installed web UI version
+      ansible.builtin.shell: |
+        if [ -f {{ qdrant_root }}/static/.version ]; then
+          cat {{ qdrant_root }}/static/.version
+        else
+          echo none
+        fi
+      register: qdrant_webui_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Download the Qdrant web UI (pinned version)
+      ansible.builtin.get_url:
+        url: "{{ qdrant_webui_url }}"
+        dest: /tmp/qdrant-webui.zip
+      when: qdrant_webui_installed.stdout != qdrant_webui_version
+
+    - name: Install the web UI assets into the working directory
+      ansible.builtin.shell: |
+        set -euo pipefail
+        rm -rf {{ qdrant_root }}/static /tmp/qdrant-webui-stage
+        mkdir -p /tmp/qdrant-webui-stage
+        # explicit stage dir: unzip (not the unarchive module) so the
+        # dist/ root inside the zip is handled deterministically
+        unzip -q -o /tmp/qdrant-webui.zip -d /tmp/qdrant-webui-stage
+        mv /tmp/qdrant-webui-stage/dist {{ qdrant_root }}/static
+        chown -R {{ qdrant_user }}:{{ qdrant_user }} {{ qdrant_root }}/static
+        echo {{ qdrant_webui_version }} > {{ qdrant_root }}/static/.version
+        rm -rf /tmp/qdrant-webui-stage
+      when: qdrant_webui_installed.stdout != qdrant_webui_version
+
+    - name: Remove the web UI zip
+      ansible.builtin.file:
+        path: /tmp/qdrant-webui.zip
+        state: absent
+      when: qdrant_webui_installed.stdout != qdrant_webui_version
+
+    # The static scope is registered at startup — an already-running qdrant
+    # (idempotent re-run) needs a restart to pick up freshly installed assets.
+    - name: Restart Qdrant to mount the web UI
+      ansible.builtin.systemd:
+        name: qdrant
+        state: restarted
+      when: qdrant_webui_installed.stdout != qdrant_webui_version
+
+    # --- systemd unit ----------------------------------------------------------------
+    # Mode 0640: the unit carries the API key in an Environment= line.
+    - name: Deploy qdrant.service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/qdrant.service
+        owner: root
+        group: root
+        mode: "0640"
+        content: |
+          [Unit]
+          Description=Qdrant (vector database)
+          After=network.target
+          Wants=network-online.target
+
+          [Service]
+          User={{ qdrant_user }}
+          Group={{ qdrant_user }}
+          WorkingDirectory={{ qdrant_root }}
+          Environment=QDRANT__SERVICE__API_KEY={{ qdrant_api_key }}
+          ExecStart=/usr/local/bin/qdrant --config-path /etc/qdrant/config.yaml
+          Restart=always
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Qdrant
+      ansible.builtin.systemd:
+        name: qdrant
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # --- Verification ------------------------------------------------------------------
+    - name: Wait for Qdrant to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ qdrant_port }}"
+        timeout: 120
+
+    - name: Verify the API key grants access
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qdrant_port }}/collections"
+        method: GET
+        headers:
+          api-key: "{{ qdrant_api_key }}"
+        status_code: 200
+        timeout: 10
+      register: qdrant_authed
+      until: qdrant_authed.status == 200
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    # Missing api-key header is rejected with 401 by the auth middleware
+    # (403 would mean a provided key was invalid).
+    - name: Verify unauthenticated access is refused
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qdrant_port }}/collections"
+        method: GET
+        status_code: 401
+        timeout: 10
+      changed_when: false
+
+    # The REST-port /metrics endpoint is auth-protected as well.
+    - name: Verify /metrics on the REST port also requires the key
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qdrant_port }}/metrics"
+        method: GET
+        status_code: 401
+        timeout: 10
+      changed_when: false
+
+    - name: Wait for the metrics server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ qdrant_metrics_port }}"
+        timeout: 60
+
+    - name: Verify the dedicated metrics endpoint answers without auth
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qdrant_metrics_port }}/metrics"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: qdrant_metrics
+      until: qdrant_metrics.status == 200 and "collections_total" in qdrant_metrics.content
+      retries: 10
+      delay: 3
+      changed_when: false
+
+    # /dashboard* is whitelisted from api-key auth, so the static UI loads
+    # without a key (its API calls then authenticate with the key entered
+    # in the dashboard's login screen).
+    - name: Verify the web UI is served at /dashboard
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ qdrant_port }}/dashboard"
+        method: GET
+        status_code: 200
+        timeout: 10
+      register: qdrant_dashboard
+      until: qdrant_dashboard.status == 200
+      retries: 10
+      delay: 3
+      changed_when: false

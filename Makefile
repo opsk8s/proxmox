@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-git deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
+.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
 
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
@@ -18,7 +18,7 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 # open-webui fetches the LAN CA from it and verifies app.llm.lan over TLS)
 # -> open-webui -> observability (monitoring, exporters).
 # Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
-deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-git deploy-llm deploy-jenkins \
+deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-llm deploy-jenkins \
 	deploy-jenkins-agent deploy-nginx deploy-open-webui \
 	deploy-monitoring
 
@@ -80,6 +80,15 @@ deploy-git:
 		--extra-vars "git_admin_password=$(call tfvar,git_admin_password) \
 		ansible_host=$(call tfvar,git_ip)"
 
+# Qdrant (vector database) on the qdrant VM: pinned static binary + systemd
+# unit; the app.qdrant.lan TLS routing lives in the central nginx module
+# (deploy-nginx). Also runs automatically via the Terraform action trigger
+# when the VM is created/updated.
+deploy-qdrant:
+	$(ANSIBLE_PLAYBOOK) -i modules/qdrant/inventory.ini modules/qdrant/ansible.yml \
+		--extra-vars "qdrant_api_key=$(call tfvar,qdrant_api_key) \
+		ansible_host=$(call tfvar,qdrant_ip)"
+
 # Monitoring VM (Prometheus + Grafana + blackbox). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
 deploy-monitoring:
@@ -96,7 +105,8 @@ deploy-monitoring:
 		elk_ip=$(call tfvar,elk_ip) \
 		nginx_ip=$(call tfvar,nginx_ip) \
 		taiga_ip=$(call tfvar,taiga_ip) \
-		git_ip=$(call tfvar,git_ip)"
+		git_ip=$(call tfvar,git_ip) \
+		qdrant_ip=$(call tfvar,qdrant_ip)"
 
 # ELK VM (OpenSearch + Dashboards). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
@@ -121,6 +131,7 @@ deploy-dns:
 		monitoring_ip=$(call tfvar,monitoring_ip) \
 		elk_ip=$(call tfvar,elk_ip) \
 		nginx_ip=$(call tfvar,nginx_ip) \
+		qdrant_ip=$(call tfvar,qdrant_ip) \
 		lan_gateway=$(call tfvar,lan_gateway)"
 
 # Reverse-proxy VM (nginx, vhosts for every service, JSON access log shipped
@@ -136,6 +147,7 @@ deploy-nginx:
 		llm_ip=$(call tfvar,llm_ip) \
 		taiga_ip=$(call tfvar,taiga_ip) \
 		git_ip=$(call tfvar,git_ip) \
+		qdrant_ip=$(call tfvar,qdrant_ip) \
 		lan_ca_token=$(call tfvar,lan_ca_token)"
 
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
@@ -153,7 +165,8 @@ deploy-exporters:
 		"dns $(call tfvar,dns_ip)" \
 		"nginx $(call tfvar,nginx_ip)" \
 		"taiga $(call tfvar,taiga_ip)" \
-		"git $(call tfvar,git_ip)"; do \
+		"git $(call tfvar,git_ip)" \
+		"qdrant $(call tfvar,qdrant_ip)"; do \
 		group=$${entry%% *}; ip=$${entry##* }; \
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \

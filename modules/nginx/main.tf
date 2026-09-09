@@ -103,6 +103,7 @@ action "ansible_playbook_run" "configure_nginx" {
       llm_ip        = var.llm_ip
       taiga_ip      = var.taiga_ip
       git_ip        = var.git_ip
+      qdrant_ip     = var.qdrant_ip
       lan_ca_token  = var.lan_ca_token
     }
   }

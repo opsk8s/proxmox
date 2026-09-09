@@ -82,6 +82,12 @@ variable "git_admin_password" {
   description = "Gitea admin (first user) password, created on the first deploy run"
 }
 
+variable "qdrant_api_key" {
+  type        = string
+  sensitive   = true
+  description = "Qdrant service API key required for every REST/gRPC call (and the web UI)"
+}
+
 variable "lan_ca_token" {
   type        = string
   description = "Shared token guarding the gateway's /lan-ca.pem endpoint (sent as the x-lan-ca-token header); the VM playbooks present it when fetching the CA root"
@@ -162,6 +168,11 @@ variable "git_ip" {
   description = "IP of the Gitea (git server) VM"
 }
 
+variable "qdrant_ip" {
+  type        = string
+  description = "IP of the Qdrant (vector database) VM"
+}
+
 variable "keyboard_layout" {
   type        = string
   description = "Keyboard layout for the VM consoles (e.g. de-ch)"
@@ -225,7 +236,7 @@ variable "monitoring_cpu_cores" {
 
 variable "monitoring_memory_mb" {
   type    = number
-  default = 2048
+  default = 4096
 }
 
 variable "elk_cpu_cores" {
@@ -245,7 +256,7 @@ variable "dns_cpu_cores" {
 
 variable "dns_memory_mb" {
   type    = number
-  default = 1024
+  default = 2048
 }
 
 variable "nginx_cpu_cores" {
@@ -255,7 +266,7 @@ variable "nginx_cpu_cores" {
 
 variable "nginx_memory_mb" {
   type    = number
-  default = 2048
+  default = 4096
 }
 
 variable "taiga_cpu_cores" {
@@ -275,6 +286,16 @@ variable "git_cpu_cores" {
 
 variable "git_memory_mb" {
   type    = number
-  default = 1024
+  default = 2048
+}
+
+variable "qdrant_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "qdrant_memory_mb" {
+  type    = number
+  default = 4096
 }
 

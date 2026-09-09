@@ -83,6 +83,10 @@ variable "git_ip" {
   type = string
 }
 
+variable "qdrant_ip" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

@@ -82,6 +82,7 @@
       - app.llm.lan
       - app.taiga.lan
       - app.git.lan
+      - app.qdrant.lan
 
     # ssl_certificate is valid in the http context, so every vhost inherits
     # the same leaf — vhosts only need `listen 443 ssl;`.
@@ -274,6 +275,28 @@
               proxy_set_header X-Forwarded-Proto $scheme;
               proxy_set_header Upgrade $http_upgrade;
               proxy_set_header Connection $connection_upgrade;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    # Qdrant: REST API + web UI + /metrics on :6333 (gRPC :6334 stays LAN-
+    # direct, nginx does no grpc_pass). Clients send the api-key header;
+    # nginx does no auth of its own. Raised body limit for bulk upserts.
+    qdrant_vhost: |
+      server {
+          listen 443 ssl;
+          server_name app.qdrant.lan;
+
+          client_max_body_size 256M;
+
+          location / {
+              proxy_pass http://{{ qdrant_ip }}:6333;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
               proxy_read_timeout 300s;
               proxy_send_timeout 300s;
           }
@@ -736,6 +759,7 @@
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
         - { file: "app-taiga.conf", content: "{{ taiga_vhost }}" }
         - { file: "app-git.conf", content: "{{ git_vhost }}" }
+        - { file: "app-qdrant.conf", content: "{{ qdrant_vhost }}" }
       notify: restart nginx
 
     - name: Enable virtual hosts
@@ -754,6 +778,7 @@
         - app-llm.conf
         - app-taiga.conf
         - app-git.conf
+        - app-qdrant.conf
 
     # The distro nginx.conf also declares `access_log /var/log/nginx/access.log;`
     # in the http context — with the json_analytics directive pointing at the
@@ -863,6 +888,24 @@
         timeout: 30
       register: nginx_kibana
       until: nginx_kibana.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # 401 (missing api-key header) can only come from the qdrant backend's
+    # auth middleware, which proves the vhost routes to qdrant instead of
+    # the default server (which answers 200). 403 would mean a key was
+    # presented but invalid — we send no key, so qdrant answers 401.
+    - name: "Verify the qdrant vhost proxies over https (Host: app.qdrant.lan)"
+      ansible.builtin.uri:
+        url: "https://127.0.0.1/collections"
+        headers:
+          Host: app.qdrant.lan
+        status_code: [401]
+        validate_certs: false
+        timeout: 10
+      register: nginx_qdrant
+      until: nginx_qdrant.status == 401
       retries: 30
       delay: 10
       changed_when: false
