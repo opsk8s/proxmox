@@ -53,7 +53,7 @@ Client → `*.lan` (dnsmasq, 24 static records) → nginx :443 (10-year local CA
 - `gpu-metrics.py` on LLM VM (15 s systemd timer, amdgpu sysfs → textfile)
 - `unbound-metrics.py` on dns VM (15 s timer, `unbound-control` unix socket)
 - postgres_exporter 0.20.1 (:9187), Jenkins prometheus plugin (:8080/prometheus/)
-- blackbox probes from monitoring VM: open-webui:8080, elk:9200+5601, nginx:80, taiga:9000 (dead port, see issues), plus UDP dns probe of dnsmasq :53
+- blackbox probes from monitoring VM: open-webui:8080, elk:9200+5601, nginx:80, taiga:8080 (front/static — was 9000, a dead port, fixed 2026-09-09), plus UDP dns probe of dnsmasq :53
 - Prometheus 3.14 (30 d retention) → Grafana with 3 dashboards; native `grafana-opensearch-datasource` plugin (stock elasticsearch datasource returns empty frames against OpenSearch)
 
 ## 3. Deployment — two parallel paths
@@ -81,10 +81,10 @@ Playbooks double as the **update mechanism** — notably taiga: re-clone pinned 
 
 ### Actually broken
 
-1. **Jenkins metrics job is permanently 401** — `modules/monitoring/ansible.yml:66-70` scrapes `:8080/prometheus/` with no `basic_auth`, but the jenkins module disables anonymous read (`allowAnonymousRead: false`). No blackbox fallback for it either.
-2. **Taiga blackbox probe targets a dead port** — `monitoring/ansible.yml:85` probes `taiga:9000`; Taiga listens on 8000/8003/8080/8888 only. Always red.
-3. **Taiga gunicorn `--worker-tmp-dir /dev/shm`** — same uid (`taiga`) as the SSH login user, so the known Ubuntu 26.04/systemd-258 `/dev/shm` reap trap (which already forced `sysv` DSM on the postgres VM) can delete gunicorn's worker-heartbeat files when an SSH session ends.
-4. **`make deploy-jenkins` leaves `adminAddress` empty** — Makefile doesn't pass `jenkins_admin_email` (the TF action does).
+1. ~~**Jenkins metrics job is permanently 401**~~ — **FIXED 2026-09-09**: `basic_auth` (admin / `jenkins_admin_password`) added to the jenkins scrape job; the password is wired through the monitoring module (variable → action extra_vars → playbook → prometheus config) and the Makefile `deploy-monitoring` target.
+2. ~~**Taiga blackbox probe targets a dead port**~~ — **FIXED 2026-09-09**: probe target changed from `taiga:9000` to `taiga:8080` (front/static server, the same port nginx proxies to).
+3. ~~**Taiga gunicorn `--worker-tmp-dir /dev/shm`**~~ — **FIXED 2026-09-09**: changed to `{{ taiga_root }}/.gunicorn-back` and `{{ taiga_root }}/.gunicorn-protected` (durable, under the deployment root — immune to both the per-user /dev/shm reap and /tmp boot-clearing). A playbook task creates the directories before the units start. The live VM had already been patched to use /tmp (crash-looped because the dir didn't exist); fixed in place and the playbook now uses the durable path.
+4. ~~**`make deploy-jenkins` leaves `adminAddress` empty**~~ — **FIXED 2026-09-09**: Makefile now passes `jenkins_admin_email` via `--extra-vars` (matching the TF action path).
 5. **`open-webui` receives `llm_ip` but never uses it** — the URL is hard-coded to `https://app.llm.lan/v1` (fine functionally, dead variable).
 
 ### Security posture
@@ -130,4 +130,4 @@ Consistently "trusted LAN," documented in headers, but worth enumerating:
 
 ## 6. Assessment
 
-The architecture is coherent and the playbooks are unusually well-commented — incident context and *why* decisions (Fluent Bit over Filebeat, sysv DSM, OpenSearch datasource plugin, AppArmor workaround for Unbound) are documented at the point of use, and 14-day retention is consistent across ISM, logrotate, and Fluent Bit. The weak spots concentrate in: the monitoring scrape config (two always-failing targets), the `/dev/shm` class of bug recurring on Taiga, secrets on the command line / in world-readable files, and a drift of ES/Kibana-era naming after the OpenSearch migration. Items 1–5 in the priority list are each small, mechanical fixes.
+The architecture is coherent and the playbooks are unusually well-commented — incident context and *why* decisions (Fluent Bit over Filebeat, sysv DSM, OpenSearch datasource plugin, AppArmor workaround for Unbound) are documented at the point of use, and 14-day retention is consistent across ISM, logrotate, and Fluent Bit. The weak spots concentrate in: the `/dev/shm` class of bug recurring on Taiga (fixed 2026-09-09), secrets on the command line / in world-readable files, and a drift of ES/Kibana-era naming after the OpenSearch migration. Items 1–4 were fixed 2026-09-09; item 5 is cosmetic.

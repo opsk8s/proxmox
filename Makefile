@@ -33,6 +33,7 @@ deploy-vllm:
 deploy-jenkins:
 	$(ANSIBLE_PLAYBOOK) -i modules/jenkins/inventory.ini modules/jenkins/ansible.yml \
 		--extra-vars "jenkins_admin_password=$(call tfvar,jenkins_admin_password) \
+		jenkins_admin_email=$(call tfvar,jenkins_admin_email) \
 		ansible_host=$(call tfvar,jenkins_ip) \
 		jenkins_http_host=$(call tfvar,jenkins_ip) \
 		jenkins_agent_host=$(call tfvar,jenkins_agent_ip)"
