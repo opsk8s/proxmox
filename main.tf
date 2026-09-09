@@ -100,6 +100,8 @@ module "open_webui" {
   lan_gateway          = var.lan_gateway
   dns_ip               = var.dns_ip
   llm_ip               = var.llm_ip
+  nginx_ip             = var.nginx_ip
+  lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -246,6 +248,7 @@ module "nginx" {
   open_webui_ip        = var.open_webui_ip
   llm_ip               = var.llm_ip
   taiga_ip             = var.taiga_ip
+  lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]

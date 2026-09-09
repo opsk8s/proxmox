@@ -1,0 +1,26 @@
+{
+  "id": "llm-body-metrics",
+  "title": "LLM Body Metrics",
+  "description": "Per-request workload metrics parsed from the LLM body indices (llm-request-body-*, llm-response-body-*): latency, upstream instance timing, errors, finish reasons, payload sizes, agentic context depth (messages/tools per request) and streaming volume. Complements the LLM Observability dashboard (which covers request/response rates and token totals). Instance = upstream_addr ip:port (llama-server 8001-8004 behind app.llm.lan).",
+  "data_views": [
+    { "id": "llm-body-data-view", "title": "LLM Body (request + response)", "pattern": "llm-*-body-*" },
+    { "id": "llm-request-body-data-view", "title": "LLM Request Body", "pattern": "llm-request-body-*" },
+    { "id": "llm-response-body-data-view", "title": "LLM Response Body", "pattern": "llm-response-body-*" }
+  ],
+  "panels": [
+    { "title": "Total requests", "x": 0, "y": 0, "w": 6, "h": 6 },
+    { "title": "Total responses", "x": 6, "y": 0, "w": 6, "h": 6 },
+    { "title": "Avg request time (s)", "x": 12, "y": 0, "w": 6, "h": 6 },
+    { "title": "Total tokens", "x": 18, "y": 0, "w": 6, "h": 6 },
+    { "title": "Latency over time", "x": 0, "y": 6, "w": 12, "h": 10 },
+    { "title": "Upstream response time by instance", "x": 12, "y": 6, "w": 12, "h": 10 },
+    { "title": "Errors (4xx/5xx) over time", "x": 0, "y": 16, "w": 12, "h": 10 },
+    { "title": "Finish reasons over time", "x": 12, "y": 16, "w": 12, "h": 10 },
+    { "title": "Request payload size", "x": 0, "y": 26, "w": 12, "h": 10 },
+    { "title": "Response payload size", "x": 12, "y": 26, "w": 12, "h": 10 },
+    { "title": "Context growth (messages)", "x": 0, "y": 36, "w": 12, "h": 10 },
+    { "title": "Tools per request", "x": 12, "y": 36, "w": 12, "h": 10 },
+    { "title": "SSE chunks per response", "x": 0, "y": 46, "w": 12, "h": 10 },
+    { "title": "Completion token distribution", "x": 12, "y": 46, "w": 12, "h": 10 }
+  ]
+}

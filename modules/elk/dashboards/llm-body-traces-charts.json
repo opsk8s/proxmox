@@ -1,0 +1,95 @@
+[
+  {
+    "viz_id": "llm-t-top-slowest",
+    "title": "Top 20 slowest requests",
+    "description": "requests ranked by end-to-end request_time (llm-response-body-*, one row per request_id; request_id is the join key to the request doc). upstream = time in the llama-server instance; tokens = usage reported by the model",
+    "chart": "table",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "splits": [
+      { "field": "request_id", "size": 20 }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "time (s)" },
+      { "type": "avg", "field": "upstream_response_time", "label": "upstream (s)" },
+      { "type": "avg", "field": "usage_total_tokens", "label": "tokens" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-req-rate",
+    "title": "Request rate",
+    "description": "requests per bucket (llm-request-body-*) — read together with Response rate: the gap is in-flight or lost requests",
+    "chart": "area",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "requests" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-resp-rate",
+    "title": "Response rate",
+    "description": "responses per bucket (llm-response-body-*) — a response lands when the stream ends, long after its request",
+    "chart": "area",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "responses" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-latency-instance",
+    "title": "Latency by instance",
+    "description": "end-to-end request_time per upstream instance (upstream_addr ip:port) — whether one llama-server is consistently slower",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "splits": [
+      { "field": "upstream_addr" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "avg request time (s)" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-proxy-overhead",
+    "title": "Proxy vs upstream time",
+    "description": "total request_time vs time inside the upstream (upstream_response_time); the gap is nginx proxy/buffering overhead (body capture, SSE pass-through)",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "total (s)" },
+      { "type": "avg", "field": "upstream_response_time", "label": "upstream (s)" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-error-table",
+    "title": "Error requests",
+    "description": "requests whose upstream returned 4xx/5xx (upstream_status >= 400) with their request_id — open the id in LLM Body Logs (Discover) to read the payloads. status is the upstream response code",
+    "chart": "table",
+    "data_view": "llm-response-body-data-view",
+    "filters": [
+      { "raw": "upstream_status:>=400" }
+    ],
+    "splits": [
+      { "field": "request_id", "size": 10 }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "time (s)" },
+      { "type": "avg", "field": "upstream_status", "label": "status" },
+      { "type": "avg", "field": "upstream_response_time", "label": "upstream (s)" }
+    ]
+  },
+  {
+    "viz_id": "llm-t-maxtokens",
+    "title": "Completion cap (max_tokens)",
+    "description": "max_tokens cap sent per request (llm-request-body-*) — the completion budget the client allows",
+    "chart": "line",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "max_tokens", "label": "avg cap" }
+    ]
+  }
+]

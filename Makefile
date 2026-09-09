@@ -14,11 +14,12 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 
 # Deploy every service in dependency order, sequentially, stopping on the
 # first failure: dns (foundation) -> elk (hard prereq: deploy-nginx
-# wait_for es:9200) -> independent backends ->
-# consumers (open-webui, nginx) -> observability (monitoring, exporters).
+# wait_for es:9200) -> independent backends -> nginx (gateway: deploy-
+# open-webui fetches the LAN CA from it and verifies app.llm.lan over TLS)
+# -> open-webui -> observability (monitoring, exporters).
 # Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
 deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-llm deploy-jenkins \
-	deploy-jenkins-agent deploy-open-webui deploy-nginx \
+	deploy-jenkins-agent deploy-nginx deploy-open-webui \
 	deploy-monitoring
 
 deploy-llm:
@@ -44,7 +45,9 @@ deploy-open-webui:
 	$(ANSIBLE_PLAYBOOK) -i modules/open-webui/inventory.ini modules/open-webui/ansible.yml \
 		--extra-vars "ansible_host=$(call tfvar,open_webui_ip) \
 		webui_ip=$(call tfvar,open_webui_ip) \
-		llm_ip=$(call tfvar,llm_ip)"
+		llm_ip=$(call tfvar,llm_ip) \
+		nginx_ip=$(call tfvar,nginx_ip) \
+		lan_ca_token=$(call tfvar,lan_ca_token)"
 
 deploy-postgres:
 	$(ANSIBLE_PLAYBOOK) -i modules/postgres/inventory.ini modules/postgres/ansible.yml \
@@ -119,7 +122,8 @@ deploy-nginx:
 		jenkins_ip=$(call tfvar,jenkins_ip) \
 		open_webui_ip=$(call tfvar,open_webui_ip) \
 		llm_ip=$(call tfvar,llm_ip) \
-		taiga_ip=$(call tfvar,taiga_ip)"
+		taiga_ip=$(call tfvar,taiga_ip) \
+		lan_ca_token=$(call tfvar,lan_ca_token)"
 
 # Scrape targets on the VMs (node_exporter, GPU collector, postgres_exporter,
 # Jenkins prometheus plugin). Idempotent — run after the service playbooks.

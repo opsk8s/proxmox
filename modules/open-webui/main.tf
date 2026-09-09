@@ -88,6 +88,8 @@ action "ansible_playbook_run" "configure_openwebui" {
       ansible_host = var.lan_ip
       webui_ip     = var.lan_ip
       llm_ip       = var.llm_ip
+      nginx_ip     = var.nginx_ip
+      lan_ca_token = var.lan_ca_token
     }
   }
 }

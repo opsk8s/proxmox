@@ -1,0 +1,25 @@
+{
+  "data_views": [
+    { "id": "llm-body-data-view", "title": "LLM Body (request + response)", "pattern": "llm-*-body-*" }
+  ],
+  "searches": [
+    {
+      "id": "llm-body-discover",
+      "title": "LLM Body Logs (Discover)",
+      "description": "All LLM request + response body docs in one Discover view (llm-*-body-*). Filter request_id:<id> to pull the request doc and its response doc side by side — request_id is the join key the nginx lua capture stamps on both. Fields present on only one side render empty on the other doc type.",
+      "data_view": { "id": "llm-body-data-view", "title": "LLM Body (request + response)", "pattern": "llm-*-body-*" },
+      "columns": [
+        "request_id",
+        "model",
+        "upstream_status",
+        "upstream_addr",
+        "request_time",
+        "finish_reason",
+        "usage_total_tokens",
+        "messages_count",
+        "@timestamp"
+      ],
+      "sort_field": "@timestamp"
+    }
+  ]
+}

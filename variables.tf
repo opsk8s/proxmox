@@ -77,6 +77,11 @@ variable "grafana_admin_password" {
   description = "Grafana admin password"
 }
 
+variable "lan_ca_token" {
+  type        = string
+  description = "Shared token guarding the gateway's /lan-ca.pem endpoint (sent as the x-lan-ca-token header); the VM playbooks present it when fetching the CA root"
+}
+
 # --- LAN addressing (all in proxmox.tfvars) ----------------------------------
 # Single /24 on vmbr0; every VM gets a static address. The playbooks receive
 # these via the ansible_playbook_run extra_vars; the Makefile targets read the

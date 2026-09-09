@@ -1,0 +1,166 @@
+[
+  {
+    "viz_id": "llm-m-total-requests",
+    "title": "Total requests",
+    "description": "LLM API requests captured on the nginx proxy within the time range (llm-request-body-*; one doc per POST)",
+    "chart": "metric",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "requests" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-total-responses",
+    "title": "Total responses",
+    "description": "response docs in llm-response-body-* within the time range — fewer than requests while streams are in flight or failed before the response was captured",
+    "chart": "metric",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "count", "label": "responses" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-avg-latency",
+    "title": "Avg request time (s)",
+    "description": "mean end-to-end request time over the proxy (request_time from the nginx access line, both body indices)",
+    "chart": "metric",
+    "data_view": "llm-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "avg seconds" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-total-tokens",
+    "title": "Total tokens",
+    "description": "prompt + completion tokens served in range (usage fields of llm-response-body-*; streams without include_usage report no usage)",
+    "chart": "metric",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "sum", "field": "usage_total_tokens", "label": "tokens" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-latency",
+    "title": "Latency over time",
+    "description": "end-to-end request time (nginx request_time) — mean plus p50/p90/p99; long streaming agentic calls dominate the tail",
+    "chart": "line",
+    "data_view": "llm-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "request_time", "label": "avg (s)" },
+      { "type": "percentiles", "field": "request_time", "percents": [50, 90, 99], "label": "p50/p90/p99 (s)" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-upstream-rt",
+    "title": "Upstream response time by instance",
+    "description": "time spent in the upstream llama-server instance (upstream_response_time) per upstream_addr ip:port — load-balancing health across 8001-8004",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "splits": [
+      { "field": "upstream_addr" }
+    ],
+    "metrics": [
+      { "type": "avg", "field": "upstream_response_time", "label": "avg upstream (s)" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-errors",
+    "title": "Errors (4xx/5xx) over time",
+    "description": "proxied requests whose upstream returned 4xx/502 (upstream_status >= 400); 200 = healthy",
+    "chart": "area",
+    "data_view": "llm-body-data-view",
+    "filters": [
+      { "raw": "upstream_status:>=400" }
+    ],
+    "metrics": [
+      { "type": "count", "label": "errors" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-finish",
+    "title": "Finish reasons over time",
+    "description": "completion finish_reason of llm-response-body-* — tool_calls = the agent loop requested another round, stop = final answer",
+    "chart": "area",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "splits": [
+      { "field": "finish_reason" }
+    ],
+    "metrics": [
+      { "type": "count", "label": "responses" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-req-bytes",
+    "title": "Request payload size",
+    "description": "size of the OpenAI-compatible request body (request_body_bytes, llm-request-body-*) — grows with the agentic conversation history",
+    "chart": "line",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "request_body_bytes", "label": "avg request bytes" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-resp-bytes",
+    "title": "Response payload size",
+    "description": "reconstructed completion size (response_body_bytes) vs bytes actually sent over the wire (body_bytes_sent), llm-response-body-*",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "response_body_bytes", "label": "avg response bytes" },
+      { "type": "avg", "field": "body_bytes_sent", "label": "avg bytes sent" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-context",
+    "title": "Context growth (messages)",
+    "description": "messages per request (messages_count, llm-request-body-*) — the depth of the agentic conversation being replayed to the model",
+    "chart": "line",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "messages_count", "label": "avg messages/request" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-tools",
+    "title": "Tools per request",
+    "description": "tools exposed per request (tools_count, llm-request-body-*) — a guardrail signal: the function set sent to the model is expected to stay stable",
+    "chart": "line",
+    "data_view": "llm-request-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "tools_count", "label": "avg tools/request" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-chunks",
+    "title": "SSE chunks per response",
+    "description": "SSE events per streamed response (chunk_count, llm-response-body-*; non-streaming responses report 0/none)",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "avg", "field": "chunk_count", "label": "avg chunks" }
+    ]
+  },
+  {
+    "viz_id": "llm-m-comp-dist",
+    "title": "Completion token distribution",
+    "description": "per-response completion tokens (usage_completion_tokens) — p50/p90/p99; most of the tokens go into tool-call payloads",
+    "chart": "line",
+    "data_view": "llm-response-body-data-view",
+    "filters": [],
+    "metrics": [
+      { "type": "percentiles", "field": "usage_completion_tokens", "percents": [50, 90, 99], "label": "p50/p90/p99 tokens" }
+    ]
+  }
+]

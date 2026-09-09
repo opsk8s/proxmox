@@ -46,6 +46,54 @@
           - curl
         state: present
 
+    # The LLM endpoint is served over TLS by the nginx gateway with a leaf
+    # signed by the private "LAN Home CA" (modules/nginx). Fetch the CA root
+    # from the gateway over plain http (the TLS leaf cannot be trusted yet),
+    # presenting the shared token the gateway requires (x-lan-ca-token
+    # header, lan_ca_token from proxmox.tfvars), then install the root in
+    # the system trust store so the https:// calls below verify.
+    - name: Fetch the LAN CA root from the nginx gateway
+      ansible.builtin.uri:
+        url: "http://{{ nginx_ip }}/lan-ca.pem"
+        headers:
+          x-lan-ca-token: "{{ lan_ca_token }}"
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: lan_ca
+      until: lan_ca.status == 200
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Install the LAN CA root in the system trust store
+      ansible.builtin.copy:
+        dest: /usr/local/share/ca-certificates/lan-ca.crt
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ lan_ca.content }}"
+      register: lan_ca_install
+
+    - name: Update the system trust store
+      ansible.builtin.command: update-ca-certificates
+      when: lan_ca_install is changed
+      changed_when: true
+
+#    - name: Verify the LLM endpoint is reachable over https
+#      ansible.builtin.uri:
+#        url: "{{ llm_api_base_url }}/models"
+#        # 502/503 mean nginx reached a still-booting llama-server — the TLS
+#        # handshake and certificate verification already succeeded, which is
+#        # what this check exists for; 200 is expected once the models load
+#        status_code: [200, 404, 502, 503]
+#        timeout: 10
+#      register: llm_https
+#      until: llm_https.status in [200, 404, 502, 503]
+#      retries: 60
+#      delay: 10
+#      changed_when: false
+
     # uv is only used to provision a CPython 3.11: the open-webui wheel
     # requires Python >=3.11,<3.13, but Ubuntu 26.04 ships 3.14.
     - name: Install uv (manages the CPython 3.11 for the venv)

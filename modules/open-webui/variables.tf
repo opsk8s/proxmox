@@ -42,6 +42,14 @@ variable "llm_ip" {
   type = string
 }
 
+variable "nginx_ip" {
+  type = string
+}
+
+variable "lan_ca_token" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

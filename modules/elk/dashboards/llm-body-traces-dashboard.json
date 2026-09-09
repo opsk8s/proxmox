@@ -1,0 +1,18 @@
+{
+  "id": "llm-body-traces",
+  "title": "LLM Request Traces",
+  "description": "Per-request view over the LLM body indices. request_id joins the request doc (llm-request-body-*) with the response doc (llm-response-body-*) — one request can span minutes of streaming, so the slowest-request table is keyed on request_time. Request vs response rates expose in-flight/lost requests (the gap). Use the LLM Body Logs (Discover) search to open an individual request_id and read its full request/response payloads. Instance = upstream_addr ip:port (llama-server 8001-8004 behind app.llm.lan).",
+  "data_views": [
+    { "id": "llm-request-body-data-view", "title": "LLM Request Body", "pattern": "llm-request-body-*" },
+    { "id": "llm-response-body-data-view", "title": "LLM Response Body", "pattern": "llm-response-body-*" }
+  ],
+  "panels": [
+    { "title": "Top 20 slowest requests", "x": 0, "y": 0, "w": 24, "h": 12 },
+    { "title": "Request rate", "x": 0, "y": 12, "w": 12, "h": 10 },
+    { "title": "Response rate", "x": 12, "y": 12, "w": 12, "h": 10 },
+    { "title": "Latency by instance", "x": 0, "y": 22, "w": 12, "h": 10 },
+    { "title": "Proxy vs upstream time", "x": 12, "y": 22, "w": 12, "h": 10 },
+    { "title": "Error requests", "x": 0, "y": 32, "w": 12, "h": 10 },
+    { "title": "Completion cap (max_tokens)", "x": 12, "y": 32, "w": 12, "h": 10 }
+  ]
+}

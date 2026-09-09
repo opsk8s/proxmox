@@ -3,11 +3,15 @@
 definitions next to it.
 
 Inputs (committed):
-    llm-dashboard.json / nginx-dashboard.json  - dashboard layout
-    llm-charts.json / nginx-charts.json        - line/area chart definitions
+    <stack>-dashboard.json                     - dashboard layout + data views
+    <stack>-charts.json                        - chart definitions
+        (llm, nginx, request-flow, llm-body-metrics, llm-body-traces)
+    llm-body-logs.json                         - data views + Discover search
 Outputs (committed, imported by the playbook):
     llm-dashboards.ndjson / nginx-dashboards.ndjson
-        one saved object per line: data view, then charts, then dashboard
+    request-flow-dashboards.ndjson
+    llm-body-observability.ndjson
+        one saved object per line: data views, charts, dashboards, search
 
 Run locally after editing the definitions:
     python3 modules/elk/dashboards/generate_ods_objects.py
@@ -40,8 +44,12 @@ CORE_MIGRATION = "7.8.0"
 
 def _search_source(data_view_id: str, filters: list) -> str:
     # lucene query on .keyword fields: the classic searchSource query shape.
+    # A filter may carry a "raw" lucene clause instead of field/value (e.g.
+    # a range: {"raw": "upstream_status:>=400"}).
     if filters:
-        query = " AND ".join(f"{f['field']}:{f['value']}" for f in filters)
+        query = " AND ".join(
+            f["raw"] if "raw" in f else f"{f['field']}:{f['value']}" for f in filters
+        )
     else:
         query = "*"
     return json.dumps(
@@ -92,40 +100,51 @@ def data_view_object(dv: dict) -> dict:
     }
 
 
+def _metric_agg(i: int, m: dict) -> dict:
+    # percentiles metrics carry a percents list; plain count has no field.
+    if m.get("percents"):
+        mtype, params = "percentiles", {"field": m["field"], "percents": m["percents"]}
+    elif m.get("field"):
+        mtype, params = m["type"], {"field": m["field"]}
+    else:
+        mtype, params = m["type"], {}
+    return {"id": str(i), "enabled": True, "type": mtype, "schema": "metric", "params": params}
+
+
 def _vislib_vis_state(chart: dict) -> dict:
     chart_type = chart["chart"]
     metrics = chart["metrics"]
-    aggs = [
-        {
-            "id": "1",
-            "enabled": True,
-            "type": "date_histogram",
-            "schema": "segment",
-            "params": {
-                "field": "@timestamp",
-                "useNormalizedOpenSearchInterval": True,
-                "interval": "auto",
-                "drop_partials": False,
-                "customInterval": "2h",
-                "min_doc_count": 0,
-                "extended_bounds": {},
-            },
-        }
-    ]
-    for i, m in enumerate(metrics, start=2):
-        params = {"field": m["field"]} if m.get("field") else {}
+    splits = chart.get("splits", [])
+    # table (row dimension = a terms split, no time segment) and metric
+    # (single value, no time segment) charts have no date_histogram, so
+    # their metric ids start at 1; line/area keep the segment as id 1.
+    no_segment = chart_type in ("table", "metric")
+    base = 1 if no_segment else 2
+
+    aggs = []
+    if not no_segment:
         aggs.append(
             {
-                "id": str(i),
+                "id": "1",
                 "enabled": True,
-                "type": m["type"],
-                "schema": "metric",
-                "params": params,
+                "type": "date_histogram",
+                "schema": "segment",
+                "params": {
+                    "field": "@timestamp",
+                    "useNormalizedOpenSearchInterval": True,
+                    "interval": "auto",
+                    "drop_partials": False,
+                    "customInterval": "2h",
+                    "min_doc_count": 0,
+                    "extended_bounds": {},
+                },
             }
         )
-    # Optional category splits (e.g. per upstream instance / per llama
-    # instance) → one series per bucket, vislib split_group schema.
-    splits = chart.get("splits", [])
+    for i, m in enumerate(metrics):
+        aggs.append(_metric_agg(i + base, m))
+    # Optional category splits (e.g. per upstream instance / per request
+    # id) → one series per bucket, vislib split_group schema. For table
+    # charts the split is the row dimension.
     for j, s in enumerate(splits, start=1):
         aggs.append(
             {
@@ -137,17 +156,59 @@ def _vislib_vis_state(chart: dict) -> dict:
                     "id": f"s{j}",
                     "split_mode": "aggregation",
                     "field": s["field"],
-                    "size": 10,
+                    "size": s.get("size", 10),
                     "order": "desc",
-                    "orderBy": "2",
+                    "orderBy": str(base),
                     "customLabel": "",
                 },
             }
         )
-    return {
-        "title": chart["title"],
-        "type": chart_type,
-        "params": {
+
+    if chart_type == "table":
+        series = [
+            {
+                "show": True,
+                "type": "column",
+                "data": {"label": m["label"], "id": str(i + base)},
+                **({"split_id": [f"s{j}" for j in range(1, len(splits) + 1)]} if splits else {}),
+                "valueAxis": "",
+                "drawLinesBetweenPoints": False,
+                "showCircles": False,
+            }
+            for i, m in enumerate(metrics)
+        ]
+        params = {
+            "type": "table",
+            "series": series,
+            "addTooltip": True,
+            "addLegend": False,
+            "legendPosition": "right",
+            "timeseries": [],
+            "thresholdLine": {"show": False, "value": 10, "width": 1, "style": "full", "color": "#34130C"},
+        }
+    elif chart_type == "metric":
+        series = [
+            {
+                "show": True,
+                "type": "metric",
+                "data": {"label": m["label"], "id": str(i + base)},
+                "valueAxis": "",
+                "drawLinesBetweenPoints": False,
+                "showCircles": False,
+            }
+            for i, m in enumerate(metrics)
+        ]
+        params = {
+            "type": "metric",
+            "series": series,
+            "addTooltip": True,
+            "addLegend": True,
+            "legendPosition": "right",
+            "timeseries": [],
+            "thresholdLine": {"show": False, "value": 10, "width": 1, "style": "full", "color": "#34130C"},
+        }
+    else:
+        params = {
             "type": chart_type,
             "grid": {"categoryLines": False, "style": {"color": "#eee"}},
             "categoryAxes": [
@@ -180,22 +241,21 @@ def _vislib_vis_state(chart: dict) -> dict:
                     "show": True,
                     "type": chart_type,
                     "mode": "normal",
-                    "data": {"label": m["label"], "id": str(i)},
+                    "data": {"label": m["label"], "id": str(i + base)},
                     **({"split_id": [f"s{j}" for j in range(1, len(splits) + 1)]} if splits else {}),
                     "valueAxis": "ValueAxis-1",
                     "drawLinesBetweenPoints": True,
                     "showCircles": True,
                 }
-                for i, m in enumerate(metrics, start=2)
+                for i, m in enumerate(metrics)
             ],
             "addTooltip": True,
             "addLegend": True,
             "legendPosition": "right",
             "timeseries": [],
             "thresholdLine": {"show": False, "value": 10, "width": 1, "style": "full", "color": "#34130C"},
-        },
-        "aggs": aggs,
-    }
+        }
+    return {"title": chart["title"], "type": chart_type, "params": params, "aggs": aggs}
 
 
 def visualization_object(dash: dict, chart: dict) -> dict:
@@ -263,6 +323,45 @@ def dashboard_object(dash: dict, charts: list) -> dict:
     }
 
 
+def search_object(s: dict) -> dict:
+    # Core "search" (Discover) saved object — the log browser. Shape
+    # copied verbatim from a live ODS 2.19.6 search doc (.kibana_1).
+    dv = s["data_view"]
+    return {
+        "attributes": {
+            "title": s["title"],
+            "description": s.get("description", ""),
+            "hits": 0,
+            "columns": s["columns"],
+            "sort": [s.get("sort_field", "@timestamp"), "desc"],
+            "version": 1,
+            "kibanaSavedObjectMeta": {
+                "searchSourceJSON": json.dumps(
+                    {
+                        "highlightAll": True,
+                        "version": True,
+                        "query": {"language": "kuery", "query": ""},
+                        "filter": [],
+                        "indexRefName": "kibanaSavedObjectMeta.searchSourceJSON.index",
+                    },
+                    separators=(",", ":"),
+                )
+            },
+        },
+        "coreMigrationVersion": CORE_MIGRATION,
+        "id": s["id"],
+        "references": [
+            {
+                "id": dv["id"],
+                "name": "kibanaSavedObjectMeta.searchSourceJSON.index",
+                "type": "index-pattern",
+            }
+        ],
+        "migrationVersion": {"search": DASH_MIGRATION},
+        "type": "search",
+    }
+
+
 def build_stack(dash: dict, charts: list) -> list:
     # Topological order: data views first, then charts, then dashboard.
     return [
@@ -289,6 +388,34 @@ def main() -> None:
         dash = json.loads((HERE / dash_name).read_text(encoding="utf-8"))
         charts = json.loads((HERE / charts_name).read_text(encoding="utf-8"))
         write_ndjson(HERE / out_name, build_stack(dash, charts))
+
+    # LLM body observability: two dashboards (metrics + traces) over the
+    # body indices, plus the log views (a core Discover search and the
+    # Observability app's Logs Explorer saved searches). Data views may be
+    # declared by several objects, so dedupe by id, first occurrence wins.
+    body_objects = []
+    for dash_name, charts_name in [
+        ("llm-body-metrics-dashboard.json", "llm-body-metrics-charts.json"),
+        ("llm-body-traces-dashboard.json", "llm-body-traces-charts.json"),
+    ]:
+        dash = json.loads((HERE / dash_name).read_text(encoding="utf-8"))
+        charts = json.loads((HERE / charts_name).read_text(encoding="utf-8"))
+        body_objects.extend(build_stack(dash, charts))
+    # Note: ODS 2.19.6 (this build) does not register the
+    # "observability-search" saved object type (import returns 422), so the
+    # Logs Explorer saved-search idea is not viable here — the Discover
+    # search below is the log browser.
+    logs = json.loads((HERE / "llm-body-logs.json").read_text(encoding="utf-8"))
+    body_objects.extend(data_view_object(dv) for dv in logs.get("data_views", []))
+    body_objects.extend(search_object(s) for s in logs.get("searches", []))
+    seen = set()
+    deduped = []
+    for obj in body_objects:
+        if obj["id"] in seen:
+            continue
+        seen.add(obj["id"])
+        deduped.append(obj)
+    write_ndjson(HERE / "llm-body-observability.ndjson", deduped)
 
 
 if __name__ == "__main__":

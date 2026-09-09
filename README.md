@@ -103,6 +103,21 @@ openssl x509 -in lan-ca.pem -noout -subject -fingerprint -sha256
 # subject= /CN=LAN Home CA
 ```
 
+The gateway also serves the root at `http://<nginx_ip>/lan-ca.pem` (plain
+http, excluded from the http→https redirect), guarded by a shared token:
+the client must send the `x-lan-ca-token` header with the value of
+`lan_ca_token` from `proxmox.tfvars` (anything else gets `403`):
+
+```bash
+curl -fs -H "x-lan-ca-token: $LAN_CA_TOKEN" \
+  http://192.168.51.208/lan-ca.pem -o lan-ca.pem
+```
+
+The VM playbooks in this repo (e.g. `modules/open-webui`, which calls
+`app.llm.lan` over TLS) receive the token as an extra var, fetch and install
+the root automatically — the manual steps above are for machines outside
+the repo.
+
 ## Trusting the CA root
 
 ### macOS

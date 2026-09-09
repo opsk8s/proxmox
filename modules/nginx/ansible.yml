@@ -144,14 +144,31 @@
           listen 443 ssl default_server;
           server_name _;
 
-          # Every other vhost listens on 443 only, so this catch-all also
-          # owns plain HTTP for the known names: upgrade in place.
-          if ($scheme = http) {
-              return 301 https://$host$request_uri;
+          # LAN CA distribution point: the VM playbooks in this repo fetch
+          # the CA root over plain http (they cannot trust the TLS leaf
+          # yet) and install it in their trust store. The exact match wins
+          # over location /, so the http->https redirect below never
+          # applies to it. The shared token (x-lan-ca-token header, value
+          # from proxmox.tfvars) guards the endpoint — no header, wrong
+          # header: 403.
+          location = /lan-ca.pem {
+              if ($http_x_lan_ca_token != "{{ lan_ca_token }}") {
+                  return 403;
+              }
+              alias /var/www/lan-ca.pem;
+              default_type application/x-pem-file;
           }
 
-          return 200 "nginx proxy alive\n";
-          add_header Content-Type text/plain;
+          # Every other vhost listens on 443 only, so this catch-all also
+          # owns plain HTTP for the known names: upgrade in place.
+          location / {
+              if ($scheme = http) {
+                  return 301 https://$host$request_uri;
+              }
+
+              return 200 "nginx proxy alive\n";
+              add_header Content-Type text/plain;
+          }
       }
 
     kibana_vhost: |
@@ -354,6 +371,11 @@
       server {
           listen 443 ssl;
           server_name app.llm.lan;
+          # nginx default is 1M: agentic clients (multi-turn context, vision
+          # images, tool payloads) outgrow it fast. Same 100M as app-taiga.
+          # 2026-09-08 saw "client intended to send too large body" 413s at
+          # 1.6M/172M while an agentic CLI session was pushing big contexts.
+          client_max_body_size 100M;
 
           location / {
               proxy_pass http://llm_pool;
@@ -603,6 +625,17 @@
       args:
         creates: "{{ lan_ca_dir }}/ca.pem"
 
+    # Workers run as www-data and cannot read /etc/lan-ca (0700) — publish a
+    # world-readable copy of the public root for the /lan-ca.pem endpoint.
+    - name: Publish the CA root for automated client installs
+      ansible.builtin.copy:
+        src: "{{ lan_ca_dir }}/ca.pem"
+        dest: /var/www/lan-ca.pem
+        owner: root
+        group: root
+        mode: "0644"
+        remote_src: true
+
     - name: Deploy the SAN domain list for the leaf cert
       ansible.builtin.copy:
         dest: "{{ lan_ca_dir }}/domains"
@@ -811,8 +844,10 @@
       changed_when: false
 
     # Any HTTP response works (even a 4xx/502 from llama) — the capture hooks
-    # in the llm location run on POST+json requests regardless of status, so
-    # a non-empty bodies.log proves the lua script ran end to end.
+    # in the llm location run on POST+json requests regardless of status, so a
+    # match in llm-request.log proves the lua script ran end to end (bodies.log
+    # was the pre-2026-09-08 single-file format; the split capture writes
+    # llm-request.log / llm-response.log).
     - name: Verify body capture records a JSON POST through the llm vhost
       ansible.builtin.shell: |
         set -euo pipefail
@@ -821,7 +856,7 @@
           --data '{"capture_probe":true}' \
           https://127.0.0.1/health
         sleep 2
-        grep -q capture_probe /var/log/nginx/bodies.log
+        grep -q capture_probe /var/log/nginx/llm-request.log
       args:
         executable: /bin/bash
       changed_when: false
@@ -840,6 +875,19 @@
         for d in {{ lan_https_domains | join(' ') }}; do
             echo "$SAN" | grep -qE "DNS:${d}(,|$)"
         done
+      changed_when: false
+
+    - name: Verify the CA is published at /lan-ca.pem and matches the root
+      ansible.builtin.shell: |
+        set -euo pipefail
+        # with the token the served root must match /etc/lan-ca/ca.pem ...
+        curl -fs -H 'x-lan-ca-token: {{ lan_ca_token }}' \
+          http://127.0.0.1/lan-ca.pem | cmp -s - /etc/lan-ca/ca.pem
+        # ... and without it the endpoint must refuse (403)
+        if curl -fs http://127.0.0.1/lan-ca.pem > /dev/null 2>&1; then
+            echo "CA root is served without the token" >&2
+            exit 1
+        fi
       changed_when: false
 
     # --- Fluent Bit (JSON access log -> OpenSearch) -----------------------------

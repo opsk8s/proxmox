@@ -1226,6 +1226,7 @@
         - llm-dashboards.ndjson
         - nginx-dashboards.ndjson
         - request-flow-dashboards.ndjson
+        - llm-body-observability.ndjson
 
     - name: Import LLM Observability objects (data view, charts, dashboard)
       ansible.builtin.command:
@@ -1314,6 +1315,41 @@
           - "{{ flow_import.stdout }}"
       changed_when: false
 
+    # LLM body observability: two new dashboards (LLM Body Metrics, LLM Request
+    # Traces) over the llm-request-body-* / llm-response-body-* indices, plus a
+    # Discover view over the combined pattern as the log browser. (This ODS
+    # build does not register the observability-search saved object type — the
+    # import 422s — so no Observability-app Logs Explorer searches are shipped;
+    # Discover is the log browser.)
+    - name: Import LLM Body observability objects (dashboards, Discover view)
+      ansible.builtin.command:
+        argv:
+          - curl
+          - --fail
+          - --silent
+          - -F
+          - "file=@/usr/local/share/ods-llm-content/llm-body-observability.ndjson"
+          - -H
+          - "osd-xsrf: true"
+          - "http://127.0.0.1:5601/api/saved_objects/_import?overwrite=true"
+      register: llmbody_import
+      changed_when: true
+
+    - name: Assert all LLM Body objects imported without failure
+      ansible.builtin.command:
+        argv:
+          - python3
+          - -c
+          - >-
+            import json, sys;
+            r = json.loads(sys.argv[1]);
+            failed = r.get("failuresCount", r.get("failed", len(r.get("failures", []))));
+            ok = r.get("successCount", r.get("succeeded", 0));
+            print("imported ok=%s failed=%s" % (ok, failed));
+            sys.exit(1 if failed else 0)
+          - "{{ llmbody_import.stdout }}"
+      changed_when: false
+
     # End-to-end check that the import actually landed all dashboards.
     - name: Verify all dashboards exist
       ansible.builtin.uri:
@@ -1322,8 +1358,21 @@
       register: dashboards_found
       changed_when: false
 
-    - name: Assert LLM, NGINX and Request Flow dashboards are present
+    - name: Assert all five dashboards are present
       ansible.builtin.assert:
         that:
-          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics", "request-flow-llm"]) | list | length) == 3
+          - (dashboards_found.json.saved_objects | map(attribute="id") | select("in", ["llm-observability", "nginx-proxy-analytics", "request-flow-llm", "llm-body-metrics", "llm-body-traces"]) | list | length) == 5
         fail_msg: Dashboards missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.
+
+    - name: Verify LLM Body Discover search exists
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:5601/api/saved_objects/_find?per_page=100&type=search"
+        status_code: 200
+      register: searches_found
+      changed_when: false
+
+    - name: Assert LLM Body Discover search is present
+      ansible.builtin.assert:
+        that:
+          - (searches_found.json.saved_objects | map(attribute="id") | select("in", ["llm-body-discover"]) | list | length) == 1
+        fail_msg: LLM body Discover search missing after import — re-run the play; check /var/log/opensearch-dashboards/ for import errors.
