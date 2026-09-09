@@ -107,6 +107,7 @@ action "ansible_playbook_run" "configure_monitoring" {
       elk_ip                 = var.elk_ip
       nginx_ip               = var.nginx_ip
       taiga_ip               = var.taiga_ip
+      git_ip                 = var.git_ip
     }
   }
 }

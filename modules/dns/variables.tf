@@ -79,6 +79,10 @@ variable "nginx_ip" {
   type = string
 }
 
+variable "git_ip" {
+  type = string
+}
+
 variable "keyboard_layout" {
   type = string
 }

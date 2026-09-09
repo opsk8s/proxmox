@@ -51,6 +51,8 @@
               labels: {instance_name: "nginx"}
             - targets: ["{{ taiga_ip }}:9100"]
               labels: {instance_name: "taiga"}
+            - targets: ["{{ git_ip }}:9100"]
+              labels: {instance_name: "git"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -90,6 +92,8 @@
               labels: {instance_name: "nginx"}
             - targets: ["http://{{ taiga_ip }}:8080/"]
               labels: {instance_name: "taiga"}
+            - targets: ["http://{{ git_ip }}:3000/"]
+              labels: {instance_name: "git"}
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target

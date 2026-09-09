@@ -1,0 +1,210 @@
+---
+# Gitea — lightweight Git hosting with web UI, PRs, issues, and webhooks.
+# Runs as the `git` user (cloud-init) on :3000 (web) + :2222 (git SSH).
+# Accessed via app.git.lan (nginx reverse proxy, TLS).
+# Jenkins clones via HTTPS using a personal access token (no SSH key needed).
+- name: Install and configure Gitea
+  hosts: git
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    git_user: git
+    gitea_root: /home/git/gitea
+    gitea_version: "1.24.2"
+    gitea_port: 3000
+    gitea_ssh_port: 2222
+    # git_ip + git_admin_password: terraform / Makefile pass them via extra_vars (proxmox.tfvars)
+    git_ip: ""
+    git_admin_password: ""
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 150
+        delay: 5
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Fail early when git_admin_password is not provided
+      ansible.builtin.fail:
+        msg: "Pass git_admin_password via extra_vars (proxmox.tfvars)"
+      when: git_admin_password | length == 0
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: git
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+        state: present
+
+    # --- Gitea binary -------------------------------------------------------------------
+    # Pinned version; update gitea_version to upgrade. The binary is a
+    # self-contained static Go binary — no runtime dependencies beyond libc.
+    - name: Check if Gitea is already installed at the target version
+      ansible.builtin.command:
+        cmd: /usr/local/bin/gitea --version
+      register: gitea_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Download Gitea binary
+      ansible.builtin.get_url:
+        url: "https://dl.gitea.com/gitea/{{ gitea_version }}/gitea-{{ gitea_version }}-linux-amd64"
+        dest: /usr/local/bin/gitea
+        mode: "0755"
+        checksum: ""
+      when: gitea_installed.rc != 0 or gitea_version not in gitea_installed.stdout
+
+    # --- Gitea data directory -------------------------------------------------------------
+    - name: Create Gitea data directory structure
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: git
+        group: git
+        mode: "0750"
+      loop:
+        - "{{ gitea_root }}"
+        - "{{ gitea_root }}/custom/conf"
+        - "{{ gitea_root }}/data"
+        - "{{ gitea_root }}/data/repositories"
+        - "{{ gitea_root }}/data/gitea"
+        - "{{ gitea_root }}/log"
+
+    # --- Gitea app.ini --------------------------------------------------------------------
+    - name: Write Gitea app.ini
+      ansible.builtin.copy:
+        dest: "{{ gitea_root }}/custom/conf/app.ini"
+        owner: git
+        group: git
+        mode: "0640"
+        content: |
+          [server]
+          DOMAIN           = app.git.lan
+          ROOT_URL         = https://app.git.lan/
+          HTTP_ADDR        = 0.0.0.0
+          HTTP_PORT        = {{ gitea_port }}
+          SSH_DOMAIN       = git.lan
+          SSH_PORT         = {{ gitea_ssh_port }}
+          SSH_LISTEN_PORT  = {{ gitea_ssh_port }}
+          DISABLE_SSH      = false
+          LFS_START_SERVER = true
+
+          [database]
+          DB_TYPE  = sqlite3
+          PATH     = {{ gitea_root }}/data/gitea/gitea.db
+
+          [repository]
+          ROOT = {{ gitea_root }}/data/repositories
+
+          [security]
+          INSTALL_LOCK   = true
+          SECRET_KEY     = changeme-on-first-login
+          INTERNAL_TOKEN = changeme-on-first-login
+
+          [service]
+          DISABLE_REGISTRATION      = true
+          REQUIRE_SIGNIN_VIEW       = false
+          REGISTER_EMAIL_CONFIRM    = false
+          ENABLE_NOTIFY_MAIL        = false
+
+          [session]
+          PROVIDER = file
+
+          [log]
+          MODE      = console
+          LEVEL     = info
+          ROOT_PATH = {{ gitea_root }}/log
+
+          [lfs]
+          PATH = {{ gitea_root }}/data/git-lfs
+
+    # --- systemd unit ---------------------------------------------------------------------
+    - name: Deploy gitea.service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/gitea.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Gitea (git with a little UI)
+          After=network.target
+          Wants=network-online.target
+
+          [Service]
+          User=git
+          Group=git
+          WorkingDirectory={{ gitea_root }}
+          ExecStart=/usr/local/bin/gitea web
+          Restart=always
+          RestartSec=5
+          Environment=HOME=/home/git
+          Environment=USER=git
+          Environment=GITEA_WORK_DIR={{ gitea_root }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Enable and start Gitea
+      ansible.builtin.systemd:
+        name: gitea
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Wait for the web UI to answer
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ gitea_port }}/"
+        status_code: [200, 302, 303]
+        timeout: 30
+      register: gitea_http
+      until: gitea_http.status in [200, 302, 303]
+      retries: 30
+      delay: 5
+      changed_when: false
+
+    # --- Gitea admin user ---------------------------------------------------------------
+    # Gitea refuses to run as root, so become the `git` user (the SSH user has
+    # NOPASSWD sudo). The first user is auto-admin, but --admin is passed anyway.
+    # Idempotent: a re-run hits "user already exists" (rc=1) and is a no-op.
+    - name: Create the Gitea admin user (from git_admin_password)
+      ansible.builtin.command:
+        cmd: >-
+          gitea admin user create
+          --username admin
+          --password "{{ git_admin_password }}"
+          --email admin@lan
+          --must-change-password=false
+          --admin
+      environment:
+        GITEA_WORK_DIR: "{{ gitea_root }}"
+      become_user: git
+      register: git_admin_create
+      no_log: true
+      changed_when: git_admin_create.rc == 0
+      failed_when:
+        - git_admin_create.rc not in [0, 1]
+        - "'user already exists' not in ((git_admin_create.stderr | default('')) ~ (git_admin_create.stdout | default('')))"
+
+    # --- Open SSH port for git operations (port 2222) -------------------------------------
+    - name: Allow Gitea SSH in UFW (if active)
+      ansible.builtin.ufw:
+        rule: allow
+        port: "{{ gitea_ssh_port }}"
+        proto: tcp
+      when: facts.ufw is not defined or facts.ufw.state is not defined

@@ -77,6 +77,11 @@ variable "grafana_admin_password" {
   description = "Grafana admin password"
 }
 
+variable "git_admin_password" {
+  type        = string
+  description = "Gitea admin (first user) password, created on the first deploy run"
+}
+
 variable "lan_ca_token" {
   type        = string
   description = "Shared token guarding the gateway's /lan-ca.pem endpoint (sent as the x-lan-ca-token header); the VM playbooks present it when fetching the CA root"
@@ -150,6 +155,11 @@ variable "dns_ip" {
 variable "nginx_ip" {
   type        = string
   description = "IP of the NGINX reverse proxy VM"
+}
+
+variable "git_ip" {
+  type        = string
+  description = "IP of the Gitea (git server) VM"
 }
 
 variable "keyboard_layout" {
@@ -256,5 +266,15 @@ variable "taiga_cpu_cores" {
 variable "taiga_memory_mb" {
   type    = number
   default = 4096
+}
+
+variable "git_cpu_cores" {
+  type    = number
+  default = 1
+}
+
+variable "git_memory_mb" {
+  type    = number
+  default = 1024
 }
 

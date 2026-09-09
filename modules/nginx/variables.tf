@@ -63,6 +63,10 @@ variable "taiga_ip" {
   type = string
 }
 
+variable "git_ip" {
+  type = string
+}
+
 variable "lan_ca_token" {
   type = string
 }

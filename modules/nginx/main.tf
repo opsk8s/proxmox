@@ -102,6 +102,7 @@ action "ansible_playbook_run" "configure_nginx" {
       open_webui_ip = var.open_webui_ip
       llm_ip        = var.llm_ip
       taiga_ip      = var.taiga_ip
+      git_ip        = var.git_ip
       lan_ca_token  = var.lan_ca_token
     }
   }

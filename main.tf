@@ -176,6 +176,7 @@ module "monitoring" {
   elk_ip                 = var.elk_ip
   nginx_ip               = var.nginx_ip
   taiga_ip               = var.taiga_ip
+  git_ip                 = var.git_ip
   keyboard_layout        = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -224,6 +225,7 @@ module "dns" {
   monitoring_ip        = var.monitoring_ip
   elk_ip               = var.elk_ip
   nginx_ip             = var.nginx_ip
+  git_ip               = var.git_ip
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [proxmox_download_file.fedora_cloud_image]
@@ -249,8 +251,29 @@ module "nginx" {
   open_webui_ip        = var.open_webui_ip
   llm_ip               = var.llm_ip
   taiga_ip             = var.taiga_ip
+  git_ip               = var.git_ip
   lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
+
+  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+}
+
+module "git" {
+  source                 = "./modules/git"
+  main_node              = var.main_node
+  backup_dir             = var.backup_dir
+  vm_dir                 = var.vm_dir
+  ubuntu_image_id        = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key         = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file   = var.ssh_private_key_file
+  cpu_cores              = var.git_cpu_cores
+  memory_mb              = var.git_memory_mb
+  lan_ip                 = var.git_ip
+  lan_network            = var.lan_network
+  lan_gateway            = var.lan_gateway
+  dns_ip                 = var.dns_ip
+  keyboard_layout        = var.keyboard_layout
+  git_admin_password     = var.git_admin_password
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }

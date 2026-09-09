@@ -44,6 +44,8 @@
       - "address=/app.open-webui.lan/{{ nginx_ip }}"
       - "address=/app.llm.lan/{{ nginx_ip }}"
       - "address=/app.taiga.lan/{{ nginx_ip }}"
+      - "address=/git.lan/{{ git_ip }}"
+      - "address=/app.git.lan/{{ nginx_ip }}"
 
   tasks:
     - name: Wait for SSH (first boot)
