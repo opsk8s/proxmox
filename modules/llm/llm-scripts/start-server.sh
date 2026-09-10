@@ -229,7 +229,7 @@ if [[ "$MTP" == "mtp" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 5
+      --spec-draft-n-max 4
     )
      if [ -f "$MTP_FILE" ]; then
         LLAMA_CMD+=(
@@ -243,7 +243,7 @@ elif [[ "$MTP" == "mtp-vision" ]]; then
       --cache-type-k-draft "$KV_CACHE_TYPE"
       --cache-type-v-draft "$KV_CACHE_TYPE"
       --spec-type draft-mtp
-      --spec-draft-n-max 5
+      --spec-draft-n-max 4
     )
     if [ -f "$MTP_FILE" ]; then
       LLAMA_CMD+=(
