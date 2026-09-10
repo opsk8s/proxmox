@@ -112,11 +112,37 @@
       become: true
       become_user: openwebui
 
+    # rc != 0 on a fresh venv (nothing installed yet) and a print of the
+    # version on re-deploys — that is what splits install from upgrade.
+    - name: Check installed open-webui version
+      ansible.builtin.command:
+        cmd: >-
+          {{ webui_venv }}/bin/python -c 'import importlib.metadata as m;
+          print(m.version("open-webui"))'
+      register: webui_installed
+      failed_when: false
+      changed_when: false
+      become: true
+      become_user: openwebui
+
     - name: Install open-webui
       ansible.builtin.command:
         cmd: "{{ uv_bin }} pip install --python {{ webui_venv }}/bin/python open-webui"
       become: true
       become_user: openwebui
+      when: webui_installed is failed
+
+    # Re-deploy on an existing VM (make deploy-open-webui / after_update):
+    # uv prints "Audited N packages" when nothing new is available, so the
+    # task stays idempotent and only reports changed on a real upgrade.
+    - name: Upgrade open-webui
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --upgrade --python {{ webui_venv }}/bin/python open-webui"
+      become: true
+      become_user: openwebui
+      when: webui_installed is succeeded
+      register: webui_upgrade
+      changed_when: "'Audited' not in webui_upgrade.stdout"
 
     - name: Ensure data directory exists (sqlite db, uploads, vector db)
       ansible.builtin.file:
@@ -168,6 +194,14 @@
         name: open-webui
         state: started
         enabled: true
+
+    # state: started above is a no-op while the old version keeps running,
+    # so an actual upgrade needs an explicit restart to pick it up.
+    - name: Restart Open WebUI after upgrade
+      ansible.builtin.systemd:
+        name: open-webui
+        state: restarted
+      when: webui_upgrade is changed
 
     - name: Wait for Open WebUI to answer on the LAN
       ansible.builtin.uri:
