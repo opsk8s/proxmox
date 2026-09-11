@@ -640,13 +640,19 @@
           Type=simple
           User=llm
           Group=llm
+          WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8085 --convert --device 3 -l auto --request-path /v1/audio --inference-path /transcriptions
+          # --tmp-dir MUST be writable: --convert writes the upload to tmp_dir
+          # (default "."), and without it the unit's CWD is / (not writable by
+          # llm) so the temp file is never created and ffmpeg fails with
+          # "No such file or directory" -> HTTP 500 FFmpeg conversion failed.
+          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8085 --convert --tmp-dir /tmp --device 3 -l auto --request-path /v1/audio --inference-path /transcriptions
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
+      notify: restart whisper-server
 
     - name: Clone Kokoro-FastAPI
       ansible.builtin.git:
@@ -770,4 +776,9 @@
     - name: restart kokoro
       ansible.builtin.systemd:
         name: kokoro
+        state: restarted
+
+    - name: restart whisper-server
+      ansible.builtin.systemd:
+        name: whisper-server
         state: restarted
