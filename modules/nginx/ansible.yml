@@ -7,6 +7,7 @@
 #   app.jenkins.lan                    -> jenkins:8080
 #   app.open-webui.lan                 -> open-webui:8080
 #   app.llm.lan                        -> llm:8001-8004 (round robin)
+#   deepseek.llm.lan                   -> api.deepseek.com (TLS upstream, body capture)
 #   app.taiga.lan                      -> taiga:8000/8003/8080/8888 (per-location)
 #
 # Every request is recorded with the json_analytics log format (one JSON
@@ -82,6 +83,7 @@
       - app.llm.lan
       - stt.llm.lan
       - tts.llm.lan
+      - deepseek.llm.lan
       - app.taiga.lan
       - app.git.lan
       - app.qdrant.lan
@@ -509,6 +511,47 @@
           }
       }
 
+    # DeepSeek API proxied over the same trusted TLS and body capture as
+    # app.llm.lan. It is OpenAI-compatible, so the lua capture parses
+    # requests/responses (SSE included) into the same llm-request.log /
+    # llm-response.log; documents carry host=deepseek.llm.lan. proxy_pass
+    # has no URI part, so /v1/... paths reach the API unchanged. The
+    # upstream is public TLS: Host must stay api.deepseek.com (not $host)
+    # and SNI must be on for the handshake. The client's Authorization
+    # header passes through untouched; the capture never stores it.
+    deepseek_vhost: |
+      server {
+          listen 443 ssl;
+          server_name deepseek.llm.lan;
+          # Same ceiling as app.llm.lan: agentic clients push big contexts
+          client_max_body_size 100M;
+
+          location / {
+              proxy_pass https://api.deepseek.com;
+              proxy_http_version 1.1;
+              proxy_ssl_protocols TLSv1.2 TLSv1.3;
+              proxy_ssl_server_name on;
+              proxy_set_header Host api.deepseek.com;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              # local add_headers disable http-context inheritance, so the
+              # HSTS header must be repeated here
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              # generations can run for minutes; SSE must not be buffered
+              proxy_buffering off;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+
+              # Same capture as app.llm.lan: request + response bodies of
+              # JSON API POSTs into llm-request.log / llm-response.log
+              # (shipped to llm-request-body-* / llm-response-body-*).
+              access_by_lua_file      /etc/nginx/lua/body-capture.lua;
+              body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
+              log_by_lua_file         /etc/nginx/lua/body-capture.lua;
+          }
+      }
+
     # --- Fluent Bit (nginx access log -> OpenSearch) ---------------------------
     # The access log is one JSON object per line; the json parser merges the
     # keys at the record root (the vhost lives in "host"). Numeric fields
@@ -807,6 +850,7 @@
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
+        - { file: "deepseek-llm.conf", content: "{{ deepseek_vhost }}" }
         - { file: "app-taiga.conf", content: "{{ taiga_vhost }}" }
         - { file: "app-git.conf", content: "{{ git_vhost }}" }
         - { file: "app-qdrant.conf", content: "{{ qdrant_vhost }}" }
@@ -828,6 +872,7 @@
         - app-llm.conf
         - stt-llm.conf
         - tts-llm.conf
+        - deepseek-llm.conf
         - app-taiga.conf
         - app-git.conf
         - app-qdrant.conf
@@ -976,6 +1021,24 @@
           https://127.0.0.1/health
         sleep 2
         grep -q capture_probe /var/log/nginx/llm-request.log
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # No API key: DeepSeek answers 401, but the capture hooks run
+    # regardless of upstream status, so a captured line for the vhost
+    # proves the proxy (TLS + SNI + Host rewrite) and the lua hooks
+    # work end to end. Tolerate a slow/dead upstream: a 502 still
+    # produces a capture line, curl gives up at 90s.
+    - name: Verify body capture records a JSON POST through the deepseek vhost
+      ansible.builtin.shell: |
+        set -euo pipefail
+        curl -sk -o /dev/null --max-time 90 -X POST -H 'Host: deepseek.llm.lan' \
+          -H 'Content-Type: application/json' \
+          --data '{"capture_probe":"deepseek"}' \
+          https://127.0.0.1/v1/chat/completions
+        sleep 2
+        grep -q '"host":"deepseek.llm.lan"' /var/log/nginx/llm-request.log
       args:
         executable: /bin/bash
       changed_when: false
