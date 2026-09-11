@@ -41,3 +41,14 @@ databases:
     schemas:
       - name: public
         owner: taiga
+
+  # Langflow (visual agent/flow builder on the langflow VM) keeps its flows
+  # and credentials here instead of in its bundled SQLite file. It connects
+  # over the LAN (the host all 192.168.51.0/24 scram-sha-256 pg_hba rule).
+  - name: langflow
+    user: langflow
+    password: "{{ langflow_db_password }}"
+    permissions: [ALL]
+    schemas:
+      - name: public
+        owner: langflow

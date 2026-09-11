@@ -42,6 +42,7 @@
       - "address=/app.prometheus.lan/{{ nginx_ip }}"
       - "address=/app.jenkins.lan/{{ nginx_ip }}"
       - "address=/app.open-webui.lan/{{ nginx_ip }}"
+      - "address=/app.langflow.lan/{{ nginx_ip }}"
       - "address=/app.llm.lan/{{ nginx_ip }}"
       - "address=/stt.llm.lan/{{ nginx_ip }}"
       - "address=/tts.llm.lan/{{ nginx_ip }}"

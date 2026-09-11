@@ -11,6 +11,7 @@
     smartshift_admin_password: ""
     analytics_ro_password: ""
     taiga_db_password: ""
+    langflow_db_password: ""
     # lan_network: terraform passes it via extra_vars (proxmox.tfvars)
     lan_subnet: "{{ lan_network }}"
     pg_port: 5432

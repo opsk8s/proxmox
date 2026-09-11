@@ -86,6 +86,7 @@ action "ansible_playbook_run" "configure_postgres" {
       smartshift_admin_password = var.smartshift_admin_password
       analytics_ro_password     = var.analytics_ro_password
       taiga_db_password         = var.taiga_db_password
+      langflow_db_password      = var.langflow_db_password
       ansible_host              = var.lan_ip
       lan_network               = var.lan_network
     }

@@ -1,0 +1,13 @@
+#cloud-config
+hostname: langflow
+timezone: Europe/Zurich
+users:
+  - name: langflow
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${langflow_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server

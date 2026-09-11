@@ -118,6 +118,7 @@ module "postgres" {
   smartshift_admin_password = var.smartshift_admin_password
   analytics_ro_password     = var.analytics_ro_password
   taiga_db_password         = var.taiga_db_password
+  langflow_db_password      = var.langflow_db_password
   ssh_private_key_file      = var.ssh_private_key_file
   cpu_cores                 = var.postgres_cpu_cores
   memory_mb                 = var.postgres_memory_mb
@@ -178,6 +179,7 @@ module "monitoring" {
   taiga_ip               = var.taiga_ip
   git_ip                 = var.git_ip
   qdrant_ip              = var.qdrant_ip
+  langflow_ip            = var.langflow_ip
   keyboard_layout        = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -255,6 +257,7 @@ module "nginx" {
   taiga_ip             = var.taiga_ip
   git_ip               = var.git_ip
   qdrant_ip            = var.qdrant_ip
+  langflow_ip          = var.langflow_ip
   lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
 
@@ -299,6 +302,31 @@ module "qdrant" {
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+}
+
+module "langflow" {
+  source                      = "./modules/langflow"
+  main_node                   = var.main_node
+  backup_dir                  = var.backup_dir
+  vm_dir                      = var.vm_dir
+  ubuntu_image_id             = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key              = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file        = var.ssh_private_key_file
+  cpu_cores                   = var.langflow_cpu_cores
+  memory_mb                   = var.langflow_memory_mb
+  lan_ip                      = var.langflow_ip
+  lan_network                 = var.lan_network
+  lan_gateway                 = var.lan_gateway
+  dns_ip                      = var.dns_ip
+  nginx_ip                    = var.nginx_ip
+  postgres_ip                 = var.postgres_ip
+  qdrant_api_key              = var.qdrant_api_key
+  lan_ca_token                = var.lan_ca_token
+  langflow_superuser_password = var.langflow_superuser_password
+  langflow_db_password        = var.langflow_db_password
+  keyboard_layout             = var.keyboard_layout
+
+  depends_on = [module.dns, module.postgres, module.nginx, proxmox_download_file.fedora_cloud_image]
 }
 
 #  zpool import -f os-ssd-fast

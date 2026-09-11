@@ -79,6 +79,10 @@ variable "qdrant_ip" {
   type = string
 }
 
+variable "langflow_ip" {
+  type = string
+}
+
 variable "grafana_admin_password" {
   type = string
 }

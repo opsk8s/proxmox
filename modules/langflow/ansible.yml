@@ -1,0 +1,425 @@
+---
+# Langflow (visual agent/flow builder) on a dedicated VM, installed natively
+# from the PyPI package into a uv-provisioned venv with a systemd unit — no
+# Docker (see the native-install convention for the app VMs).
+#
+# Reached through the nginx gateway as https://app.langflow.lan (TLS leaf
+# signed by the LAN CA, like every other vhost). Flows and credentials live
+# in the shared Postgres VM instead of the bundled SQLite file, so they
+# survive re-deploys and are covered by the existing database backups; the
+# OpenAI-compatible (llama.cpp) and DeepSeek endpoints plus the Qdrant
+# vector store are pre-wired as Langflow global variables.
+- name: Install and configure Langflow (pip package)
+  hosts: langflow
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    langflow_user: langflow
+    langflow_app_dir: /home/langflow/langflow
+    langflow_venv: /home/langflow/langflow/.venv
+    langflow_env_dir: /etc/langflow
+    langflow_env_file: /etc/langflow/langflow.env
+    langflow_secret_key_file: /etc/langflow/secret_key
+    uv_bin: /home/langflow/.local/bin/uv
+    langflow_port: 7860
+    # langflow_ip / nginx_ip / postgres_ip / qdrant_api_key / lan_ca_token /
+    # langflow_superuser_password / langflow_db_password: terraform passes
+    # them via extra_vars (proxmox.tfvars)
+    langflow_ip: ""
+    nginx_ip: ""
+    postgres_ip: ""
+    qdrant_api_key: ""
+    lan_ca_token: ""
+    langflow_superuser_password: ""
+    langflow_db_password: ""
+    # Endpoints handed to flows as global variables (credential type, i.e.
+    # masked in the visual editor). Both LLM endpoints are OpenAI-compatible
+    # and served by the gateway over the trusted .lan TLS: app.llm.lan is the
+    # llama.cpp pool on the LLM VM, deepseek.llm.lan the DeepSeek proxy. The
+    # real DeepSeek API key is entered in the UI (it is the user's own
+    # credential); nothing here stores it.
+    langflow_llm_base_url: "https://app.llm.lan/v1"
+    langflow_llm_api_key: "local"
+    deepseek_base_url: "https://deepseek.llm.lan/v1"
+    qdrant_url: "https://app.qdrant.lan"
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 150
+        delay: 5
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Gather facts
+      ansible.builtin.setup:
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: langflow
+
+    # Langflow itself fails closed when auto-login is off and no superuser
+    # password is set (it refuses to start rather than creating a default
+    # one) — fail early and legibly instead of crash-looping the unit.
+    - name: Fail early when langflow_superuser_password is not provided
+      ansible.builtin.fail:
+        msg: >-
+          Pass langflow_superuser_password via the ansible_playbook_run
+          extra_vars in Terraform (langflow_superuser_password in
+          proxmox.tfvars)
+      when: langflow_superuser_password | length == 0
+
+    - name: Fail early when langflow_db_password is not provided
+      ansible.builtin.fail:
+        msg: >-
+          Pass langflow_db_password via the ansible_playbook_run extra_vars
+          in Terraform (langflow_db_password in proxmox.tfvars) — the
+          database/role itself is provisioned by modules/postgres
+      when: langflow_db_password | length == 0
+
+    - name: Install prerequisites
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ca-certificates
+          - curl
+        state: present
+
+    # The app + its dependency tree and the embedding models a flow may load
+    # outgrow the VM's RAM; a swapfile is the safety net so a spike degrades
+    # instead of hard-killing the process (same as the open-webui VM).
+    - name: Check whether the swapfile already exists
+      ansible.builtin.stat:
+        path: /swapfile
+      register: langflow_swapfile
+
+    - name: Create a 4 GiB swapfile
+      ansible.builtin.command:
+        cmd: fallocate -l 4G /swapfile
+        creates: /swapfile
+
+    - name: Restrict swapfile permissions
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Format the swapfile (first run only)
+      ansible.builtin.command:
+        cmd: mkswap /swapfile
+      when: not langflow_swapfile.stat.exists
+      changed_when: true
+
+    - name: Persist the swapfile in /etc/fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^/swapfile\s'
+        line: "/swapfile none swap sw 0 0"
+        state: present
+
+    - name: List currently active swap devices
+      ansible.builtin.command:
+        cmd: swapon --show=NAME --noheadings
+      register: langflow_swapon
+      changed_when: false
+      failed_when: false
+
+    - name: Enable the swapfile
+      ansible.builtin.command:
+        cmd: swapon /swapfile
+      when: "'/swapfile' not in (langflow_swapon.stdout | default(''))"
+      changed_when: true
+
+    # The LLM/Qdrant endpoints are served over TLS by the nginx gateway with
+    # a leaf signed by the private "LAN Home CA" (modules/nginx). Fetch the
+    # CA root from the gateway over plain http (the TLS leaf cannot be
+    # trusted yet), presenting the shared token the gateway requires
+    # (x-lan-ca-token header, lan_ca_token from proxmox.tfvars), then install
+    # the root in the system trust store so the https:// calls below verify.
+    - name: Fetch the LAN CA root from the nginx gateway
+      ansible.builtin.uri:
+        url: "http://{{ nginx_ip }}/lan-ca.pem"
+        headers:
+          x-lan-ca-token: "{{ lan_ca_token }}"
+        return_content: true
+        status_code: 200
+        timeout: 10
+      register: lan_ca
+      until: lan_ca.status == 200
+      retries: 60
+      delay: 10
+      changed_when: false
+
+    - name: Install the LAN CA root in the system trust store
+      ansible.builtin.copy:
+        dest: /usr/local/share/ca-certificates/lan-ca.crt
+        owner: root
+        group: root
+        mode: "0644"
+        content: "{{ lan_ca.content }}"
+      register: lan_ca_install
+
+    - name: Update the system trust store
+      ansible.builtin.command: update-ca-certificates
+      when: lan_ca_install is changed
+      changed_when: true
+
+    # uv provisions the CPython for the venv: Langflow supports 3.10-3.14 and
+    # Ubuntu 26.04 ships 3.14, but 3.12 is pinned for the widest wheel
+    # coverage across Langflow's dependency tree.
+    - name: Install uv (manages the CPython 3.12 for the venv)
+      ansible.builtin.shell: >
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: /home/langflow/.local/bin/uv
+      become: true
+      become_user: langflow
+
+    - name: Create virtualenv with CPython 3.12
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} venv --python 3.12 {{ langflow_venv }}"
+      args:
+        creates: "{{ langflow_venv }}"
+      become: true
+      become_user: langflow
+
+    # rc != 0 on a fresh venv (nothing installed yet) and a print of the
+    # version on re-deploys — that is what splits install from upgrade.
+    - name: Check installed langflow version
+      ansible.builtin.command:
+        cmd: >-
+          {{ langflow_venv }}/bin/python -c 'import importlib.metadata as m;
+          print(m.version("langflow"))'
+      register: langflow_installed
+      failed_when: false
+      changed_when: false
+      become: true
+      become_user: langflow
+
+    # The base langflow wheel carries no Postgres driver: pointed at
+    # LANGFLOW_DATABASE_URL it imports one and exits with ModuleNotFoundError
+    # instead of starting (crash loop, nothing listening on 7860).
+    # langflow-base 1.12 declares the postgresql extra as BOTH
+    # sqlalchemy[postgresql-psycopg2binary] and sqlalchemy[postgresql-psycopg],
+    # so install the extra rather than a single driver by hand — psycopg2
+    # alone still crashes on `import psycopg`. Requested by BOTH the install
+    # and the upgrade command so a re-run on an already-installed VM picks it
+    # up too (the quotes keep the brackets literal whichever module runs it).
+    - name: Install langflow
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --python {{ langflow_venv }}/bin/python 'langflow[postgresql]'"
+      become: true
+      become_user: langflow
+      when: langflow_installed is failed
+
+    # Re-deploy on an existing VM (make deploy-langflow / after_update): uv
+    # prints "Audited N packages" when nothing new is available, so the task
+    # stays idempotent and only reports changed on a real upgrade.
+    - name: Upgrade langflow
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --upgrade --python {{ langflow_venv }}/bin/python 'langflow[postgresql]'"
+      become: true
+      become_user: langflow
+      when: langflow_installed is succeeded
+      register: langflow_upgrade
+      changed_when: "'Audited' not in langflow_upgrade.stdout"
+
+    # --- service configuration -------------------------------------------------
+    # Secrets live in an EnvironmentFile (root:langflow 0640) rather than in
+    # the unit: the superuser password, the Postgres URL and the service
+    # credentials must not be world-readable in /etc/systemd/system.
+    - name: Create the langflow configuration directory
+      ansible.builtin.file:
+        path: "{{ langflow_env_dir }}"
+        state: directory
+        owner: root
+        group: langflow
+        mode: "0750"
+
+    # Langflow auto-generates a secret key when none is provided, but the key
+    # signs JWTs and encrypts the credentials stored in the database — a new
+    # one on every re-install would orphan them, so it is generated once and
+    # kept.
+    - name: Generate the Langflow secret key (first run only)
+      ansible.builtin.shell: >
+        openssl rand -hex 32 > {{ langflow_secret_key_file }}
+      args:
+        creates: "{{ langflow_secret_key_file }}"
+
+    - name: Restrict the secret key permissions
+      ansible.builtin.file:
+        path: "{{ langflow_secret_key_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Read the secret key
+      ansible.builtin.slurp:
+        src: "{{ langflow_secret_key_file }}"
+      register: langflow_secret_key
+
+    # QDRANT_URL/QDRANT_API_KEY/OPENAI_API_BASE_URL/OPENAI_API_KEY/
+    # DEEPSEEK_API_BASE_URL are turned into Langflow global variables by
+    # LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT below (comma-separated, no
+    # spaces, every name must be defined here).
+    - name: Deploy the Langflow environment file
+      ansible.builtin.copy:
+        dest: "{{ langflow_env_file }}"
+        owner: root
+        group: langflow
+        mode: "0640"
+        content: |
+          # Managed by Ansible (modules/langflow/ansible.yml).
+          LANGFLOW_HOST=0.0.0.0
+          LANGFLOW_PORT={{ langflow_port }}
+          # authentication: password login, no public self-registration
+          LANGFLOW_AUTO_LOGIN=False
+          LANGFLOW_ENABLE_SIGNUP=False
+          LANGFLOW_SUPERUSER_PASSWORD={{ langflow_superuser_password }}
+          LANGFLOW_SECRET_KEY={{ langflow_secret_key.content | b64decode | trim }}
+          # flows + credentials live in the shared postgres VM (role and
+          # database are provisioned by modules/postgres/database.yaml)
+          LANGFLOW_DATABASE_URL=postgresql://langflow:{{ langflow_db_password }}@{{ postgres_ip }}:5432/langflow
+          # no anonymous usage data (same opt-out as the open-webui unit;
+          # Langflow advertises DO_NOT_TRACK on first start)
+          DO_NOT_TRACK=true
+
+          # endpoints exposed to flows as global variables
+          LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=QDRANT_URL,QDRANT_API_KEY,OPENAI_API_BASE_URL,OPENAI_API_KEY,DEEPSEEK_API_BASE_URL
+          QDRANT_URL={{ qdrant_url }}
+          QDRANT_API_KEY={{ qdrant_api_key }}
+          OPENAI_API_BASE_URL={{ langflow_llm_base_url }}
+          OPENAI_API_KEY={{ langflow_llm_api_key }}
+          DEEPSEEK_API_BASE_URL={{ deepseek_base_url }}
+      notify: restart langflow
+
+    - name: Deploy langflow.service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/langflow.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Langflow (visual agent/flow builder)
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ langflow_user }}
+          Group={{ langflow_user }}
+          WorkingDirectory={{ langflow_app_dir }}
+          Environment=HOME=/home/langflow
+          Environment=PATH=/home/langflow/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+          EnvironmentFile={{ langflow_env_file }}
+          ExecStart={{ langflow_venv }}/bin/langflow run --host 0.0.0.0 --port {{ langflow_port }} --log-level info
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart langflow
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start Langflow
+      ansible.builtin.systemd:
+        name: langflow
+        state: started
+        enabled: true
+
+    # state: started above is a no-op while the old version keeps running, so
+    # an actual upgrade needs an explicit restart to pick it up.
+    - name: Restart Langflow after upgrade
+      ansible.builtin.systemd:
+        name: langflow
+        state: restarted
+      when: langflow_upgrade is changed
+
+    # Notified handlers only flush at play END, so restart explicitly here and
+    # let the probes below run against the config we just wrote.
+    - name: Restart Langflow to load the freshly deployed configuration
+      ansible.builtin.systemd:
+        name: langflow
+        state: restarted
+
+    - name: Wait for Langflow to answer on the LAN
+      ansible.builtin.uri:
+        url: "http://{{ langflow_ip }}:{{ langflow_port }}/"
+        status_code: 200
+        timeout: 10
+      register: langflow_check
+      until: langflow_check.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # Ubuntu 26.04's system OpenSSL rejects the LAN CA root (generated without
+    # a keyUsage extension) in Python's ssl module, so ansible's uri module
+    # fails here with "CA cert does not include key usage extension" even
+    # though the venv CPython Langflow actually runs on accepts the same CA
+    # (verified 2026-09-11: venv python reaches these endpoints, system
+    # python3 does not). Validate the trust chain with openssl s_client, the
+    # same way the nginx play checks the served leaf.
+    - name: Verify the LAN CA validates the gateway leaf for both endpoints
+      ansible.builtin.shell: |
+        set -euo pipefail
+        for host in app.llm.lan app.qdrant.lan; do
+            echo | openssl s_client -connect "${host}:443" \
+              -CAfile /usr/local/share/ca-certificates/lan-ca.crt 2>/dev/null \
+              | grep -q "Verify return code: 0 (ok)"
+        done
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    # -k (not -CAfile): the system curl applies the same strict CA policy as
+    # python3 above. 502/503 mean nginx reached a still-booting llama-server;
+    # the handshake itself is covered by the s_client check above, 404 a
+    # llama.cpp build without /v1/models.
+    - name: Verify the LLM endpoint is reachable through the gateway
+      ansible.builtin.shell: |
+        set -euo pipefail
+        code=$(curl -sk -o /dev/null -w '%{http_code}' \
+          --max-time 10 {{ langflow_llm_base_url }}/models)
+        case "$code" in 200|404|502|503) ;; *) exit 1 ;; esac
+      args:
+        executable: /bin/bash
+      register: langflow_llm
+      until: langflow_llm.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # Proves the vector store wiring end to end: DNS for app.qdrant.lan, the
+    # gateway routing to Qdrant and the API key being accepted (a wrong key
+    # answers 403).
+    - name: Verify the Qdrant endpoint answers with the API key
+      ansible.builtin.shell: |
+        set -euo pipefail
+        code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
+          -H "api-key: {{ qdrant_api_key }}" {{ qdrant_url }}/collections)
+        [ "$code" = "200" ]
+      args:
+        executable: /bin/bash
+      register: langflow_qdrant
+      until: langflow_qdrant.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+  handlers:
+    - name: restart langflow
+      ansible.builtin.systemd:
+        name: langflow
+        state: restarted

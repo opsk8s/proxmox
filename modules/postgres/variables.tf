@@ -34,6 +34,10 @@ variable "taiga_db_password" {
   type = string
 }
 
+variable "langflow_db_password" {
+  type = string
+}
+
 variable "ssh_private_key_file" {
   type = string
 }

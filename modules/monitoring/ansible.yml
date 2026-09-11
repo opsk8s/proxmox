@@ -55,6 +55,8 @@
               labels: {instance_name: "git"}
             - targets: ["{{ qdrant_ip }}:9100"]
               labels: {instance_name: "qdrant"}
+            - targets: ["{{ langflow_ip }}:9100"]
+              labels: {instance_name: "langflow"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU)
         - job_name: llama
@@ -105,6 +107,8 @@
               labels: {instance_name: "taiga"}
             - targets: ["http://{{ git_ip }}:3000/"]
               labels: {instance_name: "git"}
+            - targets: ["http://{{ langflow_ip }}:7860/"]
+              labels: {instance_name: "langflow"}
           relabel_configs:
             - source_labels: [__address__]
               target_label: __param_target

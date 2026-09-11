@@ -6,6 +6,7 @@
 #   app.prometheus.lan                 -> monitoring:9090
 #   app.jenkins.lan                    -> jenkins:8080
 #   app.open-webui.lan                 -> open-webui:8080
+#   app.langflow.lan                   -> langflow:7860 (visual agent/flow builder)
 #   app.llm.lan                        -> llm:8001-8004 (round robin)
 #   deepseek.llm.lan                   -> api.deepseek.com (TLS upstream, body capture)
 #   app.taiga.lan                      -> taiga:8000/8003/8080/8888 (per-location)
@@ -80,6 +81,7 @@
       - app.prometheus.lan
       - app.jenkins.lan
       - app.open-webui.lan
+      - app.langflow.lan
       - app.llm.lan
       - stt.llm.lan
       - tts.llm.lan
@@ -281,6 +283,38 @@
               proxy_set_header Connection $connection_upgrade;
               proxy_read_timeout 300s;
               proxy_send_timeout 300s;
+          }
+      }
+
+    # Langflow: visual agent/flow builder on its own VM (:7860). The editor
+    # streams node execution over a WebSocket — hence the upgrade headers —
+    # and buffering is off so those messages reach the browser as they are
+    # produced. Uploads are bounded by Langflow's own 1 GiB default
+    # (--max-file-size-upload), so the matching client_max_body_size keeps
+    # nginx from rejecting documents the app would accept.
+    langflow_vhost: |
+      server {
+          listen 443 ssl;
+          server_name app.langflow.lan;
+
+          client_max_body_size 1024M;
+
+          location / {
+              proxy_pass http://{{ langflow_ip }}:7860;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              # local add_headers disable http-context inheritance, so the
+              # HSTS header must be repeated here
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              proxy_buffering off;
+              # flow runs (and the playground) can stream for minutes
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
           }
       }
 
@@ -847,6 +881,7 @@
         - { file: "app-prometheus.conf", content: "{{ prometheus_vhost }}" }
         - { file: "app-jenkins.conf", content: "{{ jenkins_vhost }}" }
         - { file: "app-open-webui.conf", content: "{{ open_webui_vhost }}" }
+        - { file: "app-langflow.conf", content: "{{ langflow_vhost }}" }
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
@@ -869,6 +904,7 @@
         - app-prometheus.conf
         - app-jenkins.conf
         - app-open-webui.conf
+        - app-langflow.conf
         - app-llm.conf
         - stt-llm.conf
         - tts-llm.conf

@@ -109,6 +109,7 @@ action "ansible_playbook_run" "configure_monitoring" {
       taiga_ip               = var.taiga_ip
       git_ip                 = var.git_ip
       qdrant_ip              = var.qdrant_ip
+      langflow_ip            = var.langflow_ip
     }
   }
 }

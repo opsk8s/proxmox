@@ -100,6 +100,7 @@ action "ansible_playbook_run" "configure_nginx" {
       monitoring_ip = var.monitoring_ip
       jenkins_ip    = var.jenkins_ip
       open_webui_ip = var.open_webui_ip
+      langflow_ip   = var.langflow_ip
       llm_ip        = var.llm_ip
       taiga_ip      = var.taiga_ip
       git_ip        = var.git_ip

@@ -67,6 +67,16 @@ variable "taiga_db_password" {
   description = "Password for the taiga database user (see modules/postgres/database.yaml)"
 }
 
+variable "langflow_db_password" {
+  type        = string
+  description = "Password for the langflow database user (see modules/postgres/database.yaml)"
+}
+
+variable "langflow_superuser_password" {
+  type        = string
+  description = "Langflow superuser password; required because auto-login is disabled (the UI fails closed without it)"
+}
+
 variable "taiga_admin_password" {
   type        = string
   description = "Taiga admin (superuser) password, created on the first deploy run"
@@ -171,6 +181,11 @@ variable "git_ip" {
 variable "qdrant_ip" {
   type        = string
   description = "IP of the Qdrant (vector database) VM"
+}
+
+variable "langflow_ip" {
+  type        = string
+  description = "IP of the Langflow (visual agent/flow builder) VM"
 }
 
 variable "keyboard_layout" {
@@ -298,6 +313,16 @@ variable "qdrant_cpu_cores" {
 }
 
 variable "qdrant_memory_mb" {
+  type    = number
+  default = 4096
+}
+
+variable "langflow_cpu_cores" {
+  type    = number
+  default = 2
+}
+
+variable "langflow_memory_mb" {
   type    = number
   default = 4096
 }

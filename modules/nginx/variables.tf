@@ -55,6 +55,10 @@ variable "open_webui_ip" {
   type = string
 }
 
+variable "langflow_ip" {
+  type = string
+}
+
 variable "llm_ip" {
   type = string
 }
