@@ -184,6 +184,17 @@
               type: keyword
             response_content_type:
               type: keyword
+            # All HTTP request headers as a {name: value} object (header
+            # name lowercased; sensitive headers dropped by body-capture.lua).
+            # Dynamic sub-fields: each header name maps to text/keyword, so
+            # headers.<name>.keyword is exact-match queryable.
+            headers:
+              type: object
+              dynamic: true
+            # Client tracing id promoted from the x-conversation-id request
+            # header (absent when the client did not send one).
+            conversation_id:
+              type: keyword
             # Parsed request payload (OpenAI-compatible chat completion):
             model:
               type: keyword
@@ -356,6 +367,15 @@
             request_content_type:
               type: keyword
             response_content_type:
+              type: keyword
+            # All HTTP response headers as a {name: value} object (header
+            # name lowercased; sensitive headers dropped by body-capture.lua).
+            headers:
+              type: object
+              dynamic: true
+            # Copied from the request's x-conversation-id header, so a
+            # response doc joins its request/conversation.
+            conversation_id:
               type: keyword
             # Parsed response (SSE stream or single completion JSON):
             stream:

@@ -78,6 +78,28 @@ local function ident_fields()
   }
 end
 
+-- All HTTP headers as a {name: value} object for the index (names come
+-- back lowercased from the ngx API). Sensitive headers are dropped
+-- entirely; remove names from the list to store them.
+local function headers_obj(h)
+  local out = {}
+  if type(h) ~= "table" then
+    return out
+  end
+  for name, value in pairs(h) do
+    if name == "authorization"
+        or name == "proxy-authorization"
+        or name == "x-api-key"
+        or name == "cookie"
+        or name == "set-cookie" then
+      -- skip: do not store the value (or even the key) for these
+    else
+      out[name] = value
+    end
+  end
+  return out
+end
+
 local function write_line(path, rec)
   local json = cjson.encode(rec)
   if not json then
@@ -393,6 +415,10 @@ elseif phase == "log" then
   end
   local ok, err = pcall(function()
     local resp_raw = table.concat(c.chunks)
+    local req_headers = ngx.req.get_headers()
+    -- stamp the client's tracing id on both docs, so a response joins its
+    -- request/conversation and not just the single-request request_id
+    local conversation_id = req_headers["x-conversation-id"]
 
     local req = ident_fields()
     for k, v in pairs(parse_request(c.req_body)) do
@@ -405,6 +431,8 @@ elseif phase == "log" then
     req.request_content_type = ngx.var.http_content_type or ""
     req.response_content_type = ngx.var.sent_http_content_type or ""
     req.request_body_bytes = #c.req_body
+    req.headers = headers_obj(req_headers)
+    req.conversation_id = conversation_id
     req.truncated = c.overflow
     req.source = "nginx"
     write_line(REQ_LOG, req)
@@ -420,6 +448,8 @@ elseif phase == "log" then
       resp.response_body_raw = resp_raw
     end
     resp.response_body_bytes = c.size
+    resp.headers = headers_obj(ngx.resp.get_headers())
+    resp.conversation_id = conversation_id
     resp.truncated = c.overflow
     resp.source = "nginx"
     write_line(RESP_LOG, resp)
