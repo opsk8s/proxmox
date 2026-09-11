@@ -514,7 +514,7 @@
         - { port: 8001, device: 0, api: vulkan, context: 131072 }
         - { port: 8002, device: 1, api: vulkan, context: 131072 }
         - { port: 8003, device: 2, api: vulkan, context: 131072 }
-        # - { port: 8004, device: 3, api: vulkan, context: 131072 }
+        - { port: 8004, device: 3, api: vulkan, context: 131072 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
@@ -560,13 +560,14 @@
         - { port: 8001 }
         - { port: 8002 }
         - { port: 8003 }
+        - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003]
+      loop: [8001, 8002, 8003, 8004]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -578,7 +579,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003]
+      loop: [8001, 8002, 8003, 8004]
 
     # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
     # Open WebUI talks to these as OpenAI-compatible audio endpoints:

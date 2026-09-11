@@ -44,6 +44,10 @@
         name:
           - ca-certificates
           - curl
+          # Open WebUI's audio router (pydub) shells out to ffmpeg/ffprobe;
+          # without them it logs "No such file or directory: 'ffprobe'" on
+          # every transcription and can't inspect/convert uploaded audio.
+          - ffmpeg
         state: present
 
     # Open WebUI's working set (app + langchain + the bundled
