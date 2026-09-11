@@ -47,6 +47,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   cpu {
     sockets = 1
     cores   = var.cpu_cores
+    # the default qemu64 CPU exposes a baseline-only feature set (no SSE4.2/POPCNT)
+    # and numpy 2.x / torch wheels refuse to load on it; pass the host's features
+    # through so the Kokoro TTS stack (torch) can run.
+    type = "host"
   }
 
   memory {

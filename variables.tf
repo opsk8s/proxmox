@@ -181,7 +181,7 @@ variable "keyboard_layout" {
 # --- VM sizing (CPU cores / dedicated memory in MB) ----------------------------
 variable "llm_cpu_cores" {
   type    = number
-  default = 4
+  default = 8
 }
 
 variable "llm_memory_mb" {
@@ -214,9 +214,12 @@ variable "open_webui_cpu_cores" {
   default = 2
 }
 
+# 4 GB OOM-killed Open WebUI (the kernel killed it at ~3.7 GB anon-rss every
+# ~20 min, restart counter climbing); the app + langchain + the bundled
+# sentence-transformers embedding model need more headroom.
 variable "open_webui_memory_mb" {
   type    = number
-  default = 4096
+  default = 8192
 }
 
 variable "postgres_cpu_cores" {

@@ -46,6 +46,53 @@
           - curl
         state: present
 
+    # Open WebUI's working set (app + langchain + the bundled
+    # sentence-transformers embedding model) outgrew the VM's RAM and the
+    # kernel OOM-killed the service repeatedly. A swapfile is the safety net:
+    # a spike degrades instead of hard-killing the process.
+    - name: Check whether the swapfile already exists
+      ansible.builtin.stat:
+        path: /swapfile
+      register: webui_swapfile
+
+    - name: Create a 4 GiB swapfile
+      ansible.builtin.command:
+        cmd: fallocate -l 4G /swapfile
+        creates: /swapfile
+
+    - name: Restrict swapfile permissions
+      ansible.builtin.file:
+        path: /swapfile
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Format the swapfile (first run only)
+      ansible.builtin.command:
+        cmd: mkswap /swapfile
+      when: not webui_swapfile.stat.exists
+      changed_when: true
+
+    - name: Persist the swapfile in /etc/fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^/swapfile\s'
+        line: "/swapfile none swap sw 0 0"
+        state: present
+
+    - name: List currently active swap devices
+      ansible.builtin.command:
+        cmd: swapon --show=NAME --noheadings
+      register: webui_swapon
+      changed_when: false
+      failed_when: false
+
+    - name: Enable the swapfile
+      ansible.builtin.command:
+        cmd: swapon /swapfile
+      when: "'/swapfile' not in (webui_swapon.stdout | default(''))"
+      changed_when: true
+
     # The LLM endpoint is served over TLS by the nginx gateway with a leaf
     # signed by the private "LAN Home CA" (modules/nginx). Fetch the CA root
     # from the gateway over plain http (the TLS leaf cannot be trusted yet),
@@ -176,6 +223,17 @@
           # OpenAI-compatible endpoint (llama-server on the LLM VM, port 8001)
           Environment=OPENAI_API_BASE_URL={{ llm_api_base_url }}
           Environment=OPENAI_API_KEY=local
+          # Voice mode: STT + TTS live on the LLM VM as OpenAI-compatible
+          # audio endpoints (whisper-server :8085, Kokoro :8086).
+          Environment=AUDIO_STT_ENGINE=openai
+          Environment=AUDIO_STT_MODEL=large-v3-turbo
+          Environment=AUDIO_STT_OPENAI_API_BASE_URL=https://stt.llm.lan/v1
+          Environment=AUDIO_STT_OPENAI_API_KEY=local
+          Environment=AUDIO_TTS_ENGINE=openai
+          Environment=AUDIO_TTS_MODEL=kokoro
+          Environment=AUDIO_TTS_VOICE=af_heart
+          Environment=AUDIO_TTS_OPENAI_API_BASE_URL=https://tts.llm.lan/v1
+          Environment=AUDIO_TTS_OPENAI_API_KEY=local
           Environment=SCARF_NO_ANALYTICS=true
           Environment=DO_NOT_TRACK=true
           ExecStart={{ webui_venv }}/bin/open-webui serve --host 0.0.0.0 --port {{ webui_port }}

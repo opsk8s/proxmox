@@ -3,6 +3,13 @@
   hosts: llm
   become: true
   gather_facts: false
+  vars:
+    # Kokoro TTS runs on ROCm torch. Kokoro-FastAPI has no GPU-index setting
+    # (device is just "cuda" or "cpu"), so the card is chosen by restricting
+    # what the process can see. ROCm device order != Vulkan device order
+    # (llama-server/whisper use Vulkan 0-3) — verify with `rocm-smi --showbus`.
+    # Card 0 also hosts whisper.cpp, so 1-3 have the most headroom.
+    kokoro_gpu: "3"
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -507,7 +514,7 @@
         - { port: 8001, device: 0, api: vulkan, context: 131072 }
         - { port: 8002, device: 1, api: vulkan, context: 131072 }
         - { port: 8003, device: 2, api: vulkan, context: 131072 }
-        - { port: 8004, device: 3, api: vulkan, context: 131072 }
+        # - { port: 8004, device: 3, api: vulkan, context: 131072 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
@@ -553,14 +560,13 @@
         - { port: 8001 }
         - { port: 8002 }
         - { port: 8003 }
-        - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002, 8003]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -572,7 +578,183 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002, 8003]
+
+    # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
+    # Open WebUI talks to these as OpenAI-compatible audio endpoints:
+    #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server)
+    #   TTS -> http://<llm_ip>:8086/v1/audio/speech        (Kokoro-FastAPI)
+    # whisper.cpp's server is NOT OpenAI-compatible natively (its route is
+    # /inference), so it is registered at /v1/audio/transcriptions via
+    # --request-path/--inference-path; it still returns {"text": "..."}.
+    # whisper-server needs ffmpeg to transcode the browser's webm/ogg mic
+    # capture to 16k WAV; Kokoro needs espeak-ng for phonemization.
+    - name: Install voice-mode prerequisites (ffmpeg, espeak-ng)
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - ffmpeg
+          - espeak-ng
+        state: present
+
+    - name: Clone whisper.cpp
+      ansible.builtin.git:
+        repo: 'https://github.com/ggml-org/whisper.cpp.git'
+        dest: /home/llm/whisper.cpp
+        version: master
+      become: true
+      become_user: llm
+
+    - name: Build whisper.cpp with Vulkan (whisper-server)
+      ansible.builtin.shell: |
+        cmake -B build-vulkan -DGGML_VULKAN=ON -DWHISPER_BUILD_SERVER=ON -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-vulkan --config Release -j$(nproc)
+      args:
+        chdir: /home/llm/whisper.cpp
+        executable: /bin/bash
+        creates: /home/llm/whisper.cpp/build-vulkan/bin/whisper-server
+      become: true
+      become_user: llm
+
+    - name: Download Whisper large-v3-turbo model (f16)
+      ansible.builtin.get_url:
+        url: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin"
+        dest: /mnt/models/ggml-large-v3-turbo.bin
+        owner: llm
+        group: llm
+        mode: "0644"
+
+    - name: Deploy whisper-server systemd unit (STT)
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/whisper-server.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=whisper.cpp transcription server (STT, Vulkan GPU)
+          After=network-online.target mnt-models.mount amd-gpu-profile.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=llm
+          Group=llm
+          Environment=HOME=/home/llm
+          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8085 --convert --device 3 -l auto --request-path /v1/audio --inference-path /transcriptions
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Clone Kokoro-FastAPI
+      ansible.builtin.git:
+        repo: 'https://github.com/remsky/Kokoro-FastAPI.git'
+        dest: /home/llm/kokoro-fastapi
+        version: master
+        # clone once: .venv + downloaded models live inside the checkout, so
+        # re-pulling (update=yes) would trip on "local modifications".
+        update: false
+      become: true
+      become_user: llm
+
+    - name: Install Kokoro-FastAPI dependencies (torch excluded)
+      ansible.builtin.command:
+        cmd: /home/llm/.local/bin/uv sync --extra cpu --no-install-package torch
+      args:
+        chdir: /home/llm/kokoro-fastapi
+      become: true
+      become_user: llm
+      # uv sync is idempotent and self-heals a half-installed .venv, so run it
+      # every time instead of gating on `creates: .venv` (which would skip the
+      # sync when a previous run died partway through). torch is excluded
+      # because uv sync enforces the lock (CPU torch wheel) and would revert
+      # the ROCm build installed by the next task on every run.
+      changed_when: false
+
+    # ROCm PyTorch for gfx1201, replacing the lock's CPU wheel. Same index and
+    # pins as the vLLM recipe (llm-scripts/build-vllm.sh). Kokoro only needs
+    # torch (no torchvision/torchaudio).
+    - name: Install ROCm PyTorch into the Kokoro venv (gfx1201)
+      ansible.builtin.command:
+        cmd: >-
+          /home/llm/.local/bin/uv pip install
+          --python /home/llm/kokoro-fastapi/.venv/bin/python
+          --index-url https://stable.repo.amd.com/rocm/whl-next/
+          "rocm[libraries,device-gfx1201]==10.0.0"
+          "torch[device-gfx1201]==2.12.0+rocm10.0.0"
+      become: true
+      become_user: llm
+      changed_when: false
+
+    - name: Download Kokoro models and voices
+      ansible.builtin.shell: |
+        /home/llm/.local/bin/uv run --no-sync python docker/scripts/download_model.py --output api/src/models/v1_0
+      args:
+        chdir: /home/llm/kokoro-fastapi
+        executable: /bin/bash
+        creates: /home/llm/kokoro-fastapi/api/src/models/v1_0/kokoro-v1_0.pth
+      become: true
+      become_user: llm
+
+    - name: Deploy kokoro TTS systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/kokoro.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Kokoro TTS (OpenAI-compatible /v1/audio/speech, ROCm GPU)
+          After=network-online.target amd-gpu-profile.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=llm
+          Group=llm
+          WorkingDirectory=/home/llm/kokoro-fastapi
+          Environment=HOME=/home/llm
+          # Kokoro-FastAPI defaults these to Docker paths (/app/...); point
+          # them at the native checkout instead. The model is downloaded to
+          # api/src/models/v1_0, the voices are committed in api/src/voices/v1_0.
+          Environment=MODEL_DIR=/home/llm/kokoro-fastapi/api/src/models
+          Environment=VOICES_DIR=/home/llm/kokoro-fastapi/api/src/voices/v1_0
+          # Kokoro picks "cuda" when USE_GPU is true and has no index setting,
+          # so the card is chosen by restricting visibility (ROCm torch
+          # enumerates the AMD GPU as a CUDA device).
+          Environment=USE_GPU=true
+          Environment=HIP_VISIBLE_DEVICES={{ kokoro_gpu }}
+          ExecStart=/home/llm/kokoro-fastapi/.venv/bin/uvicorn api.src.main:app --host 0.0.0.0 --port 8086
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd to pick up the voice-mode units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start whisper-server (STT)
+      ansible.builtin.systemd:
+        name: whisper-server
+        state: started
+        enabled: true
+
+    - name: Enable and start kokoro (TTS)
+      ansible.builtin.systemd:
+        name: kokoro
+        state: started
+        enabled: true
+
+    - name: Wait for the voice-mode ports to come up
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ item }}"
+        timeout: 300
+      loop: [8085, 8086]
 
   handlers:
     - name: reload udev
