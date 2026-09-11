@@ -264,7 +264,7 @@ variable "dns_memory_mb" {
 
 variable "nginx_cpu_cores" {
   type    = number
-  default = 2
+  default = 4
 }
 
 variable "nginx_memory_mb" {

@@ -726,12 +726,19 @@
           # enumerates the AMD GPU as a CUDA device).
           Environment=USE_GPU=true
           Environment=HIP_VISIBLE_DEVICES={{ kokoro_gpu }}
+          # ROCm 7.14/7.15 regression: the HSA async-events loop busy-polls a
+          # full CPU core (rocr::core::Runtime::AsyncEventsLoop) because the
+          # profiler's interrupt signal has no backing event. Disabling HSA
+          # tool/profiler registration stops the spin (99.5% -> 0.0% CPU in
+          # the upstream report). Must be set before the process starts.
+          Environment=HSA_TOOLS_DISABLE_REGISTER=1
           ExecStart=/home/llm/kokoro-fastapi/.venv/bin/uvicorn api.src.main:app --host 0.0.0.0 --port 8086
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
+      notify: restart kokoro
 
     - name: Reload systemd to pick up the voice-mode units
       ansible.builtin.systemd:
@@ -759,3 +766,8 @@
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
+
+    - name: restart kokoro
+      ansible.builtin.systemd:
+        name: kokoro
+        state: restarted
