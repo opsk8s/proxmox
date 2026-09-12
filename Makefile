@@ -9,6 +9,15 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 
 .PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-langflow deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
 
+# Do not echo the recipes of the targets that pass secrets via --extra-vars:
+# make prints a recipe line before running it, which would put the
+# proxmox.tfvars passwords / API keys in cleartext into the terminal, any
+# captured log, and CI output. (The two exporters targets already carry a
+# leading @ for the same reason.) This only hides the echo — the values are
+# still visible in /proc/<pid>/cmdline to local users while a deploy runs, so
+# it is not a substitute for moving secrets to a vars file or vault.
+.SILENT: deploy-jenkins deploy-open-webui deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-monitoring deploy-nginx deploy-langflow
+
 # All IPs come from $(TFVARS): the inventory files no longer carry
 # ansible_host, so every target passes it via --extra-vars.
 
@@ -49,7 +58,8 @@ deploy-open-webui:
 		webui_ip=$(call tfvar,open_webui_ip) \
 		llm_ip=$(call tfvar,llm_ip) \
 		nginx_ip=$(call tfvar,nginx_ip) \
-		lan_ca_token=$(call tfvar,lan_ca_token)"
+		lan_ca_token=$(call tfvar,lan_ca_token) \
+		qdrant_api_key=$(call tfvar,qdrant_api_key)"
 
 deploy-postgres:
 	$(ANSIBLE_PLAYBOOK) -i modules/postgres/inventory.ini modules/postgres/ansible.yml \

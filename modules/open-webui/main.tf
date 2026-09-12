@@ -85,11 +85,12 @@ action "ansible_playbook_run" "configure_openwebui" {
     inventory_files  = ["${path.module}/inventory.ini"]
     private_key_file = var.ssh_private_key_file
     extra_vars = {
-      ansible_host = var.lan_ip
-      webui_ip     = var.lan_ip
-      llm_ip       = var.llm_ip
-      nginx_ip     = var.nginx_ip
-      lan_ca_token = var.lan_ca_token
+      ansible_host   = var.lan_ip
+      webui_ip       = var.lan_ip
+      llm_ip         = var.llm_ip
+      nginx_ip       = var.nginx_ip
+      lan_ca_token   = var.lan_ca_token
+      qdrant_api_key = var.qdrant_api_key
     }
   }
 }

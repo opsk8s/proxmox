@@ -102,6 +102,7 @@ module "open_webui" {
   llm_ip               = var.llm_ip
   nginx_ip             = var.nginx_ip
   lan_ca_token         = var.lan_ca_token
+  qdrant_api_key       = var.qdrant_api_key
   keyboard_layout      = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]

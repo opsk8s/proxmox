@@ -10,6 +10,20 @@
     # (llama-server/whisper use Vulkan 0-3) — verify with `rocm-smi --showbus`.
     # Card 0 also hosts whisper.cpp, so 1-3 have the most headroom.
     kokoro_gpu: "3"
+    # Dedicated embedding server for RAG (Open WebUI -> Qdrant). It is a
+    # separate instance because --embedding RESTRICTS a llama-server to the
+    # embedding use case, so it cannot be folded into the 8001-8004 chat
+    # shards. --pooling is deliberately left unset: the GGUF carries
+    # qwen3.pooling_type = 3 (LAST, the pooling Qwen3-Embedding expects) and
+    # llama.cpp uses the model default when the flag is absent. Output is
+    # 1024-dim (qwen3.embedding_length). Vulkan device 2: the four chat
+    # shards hold ~22 GB of the 32 GB on cards 0-3 and card 3 additionally
+    # hosts whisper + Kokoro (~25 GB used), so 0-2 have the headroom.
+    embed_gpu: "2"
+    embed_port: 8005
+    embed_alias: Qwen3-Embedding-0.6B
+    embed_model: /mnt/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+    embed_model_url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf"
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -581,6 +595,99 @@
       changed_when: false
       loop: [8001, 8002, 8003, 8004]
 
+    # ===== Embedding server (RAG: Open WebUI -> Qdrant) =====
+    # OpenAI-compatible /v1/embeddings on :8005; Open WebUI runs every
+    # uploaded Knowledge document through it and stores the vectors in the
+    # qdrant VM. Loaded via --embedding (embedding-only mode) rather than
+    # start-server.sh, which is chat-specific (mmproj/MTP/vision flags).
+    - name: Download the embedding model (Qwen3-Embedding-0.6B, official GGUF)
+      ansible.builtin.get_url:
+        url: "{{ embed_model_url }}"
+        dest: "{{ embed_model }}"
+        owner: llm
+        group: llm
+        mode: "0644"
+
+    - name: Deploy the embedding server systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/llama-embed.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=llama.cpp embedding server (OpenAI-compatible /v1/embeddings, Vulkan GPU)
+          After=network-online.target mnt-models.mount amd-gpu-profile.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=llm
+          Group=llm
+          WorkingDirectory=/home/llm
+          Environment=HOME=/home/llm
+          ExecStart=/home/llm/llama.cpp/build-vulkan/bin/llama-server \
+            --model {{ embed_model }} \
+            --alias {{ embed_alias }} \
+            --embedding \
+            --host 0.0.0.0 \
+            --port {{ embed_port }} \
+            --device Vulkan{{ embed_gpu }} \
+            --n-gpu-layers 999 \
+            --ctx-size 8192 \
+            --batch-size 2048 \
+            --ubatch-size 2048 \
+            --metrics
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart llama-embed
+
+    - name: Enable and start the embedding server
+      ansible.builtin.systemd:
+        name: llama-embed
+        state: started
+        enabled: true
+
+    - name: Wait for the embedding server to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ embed_port }}"
+        timeout: 300
+
+    # Proves the load mode is really embeddings: a chat-mode server rejects
+    # /v1/embeddings, and the vector length is what Open WebUI feeds Qdrant
+    # as the collection dimension. With return_content, uri exposes the body
+    # twice: `content` as a raw string and `json` as the parsed dict — the
+    # vector has to be read from `json`.
+    - name: Verify /v1/embeddings returns a vector
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ embed_port }}/v1/embeddings"
+        method: POST
+        body_format: json
+        body:
+          model: "{{ embed_alias }}"
+          input: "proxmox vector store probe"
+        return_content: true
+        status_code: 200
+        timeout: 30
+      register: embed_probe
+      until: embed_probe.status == 200
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    - name: Assert the embedding vector is well-formed
+      ansible.builtin.assert:
+        that:
+          - embed_probe.json.data | length > 0
+          - embed_probe.json.data[0].embedding | length > 100
+        fail_msg: >-
+          /v1/embeddings answered but returned no usable vector
+          ({{ embed_probe.json.data[0].embedding | default([]) | length }} dims)
+
     # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
     # Open WebUI talks to these as OpenAI-compatible audio endpoints:
     #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server)
@@ -783,3 +890,9 @@
       ansible.builtin.systemd:
         name: whisper-server
         state: restarted
+
+    - name: restart llama-embed
+      ansible.builtin.systemd:
+        name: llama-embed
+        state: restarted
+        daemon_reload: true

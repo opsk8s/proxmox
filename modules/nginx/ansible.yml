@@ -85,10 +85,12 @@
       - app.llm.lan
       - stt.llm.lan
       - tts.llm.lan
+      - embed.llm.lan
       - deepseek.llm.lan
       - app.taiga.lan
       - app.git.lan
       - app.qdrant.lan
+      - embed.qdrant.lan
 
     # ssl_certificate is valid in the http context, so every vhost inherits
     # the same leaf — vhosts only need `listen 443 ssl;`.
@@ -340,6 +342,32 @@
           }
       }
 
+    # Qdrant vector traffic, served on :6333 instead of :443. Clients that
+    # default a port-less URL to 6333 (qdrant-client's `parsed.port or 6333`,
+    # used by both open-webui and langflow) then reach this vhost from
+    # https://embed.qdrant.lan alone, where the :443 name would answer
+    # ECONNREFUSED. app.qdrant.lan keeps :443 for the dashboard. Generic HTTP
+    # tools do NOT get this for free — curl and browsers honour https -> 443,
+    # so they must ask for :6333 explicitly.
+    embed_qdrant_vhost: |
+      server {
+          listen 6333 ssl;
+          server_name embed.qdrant.lan;
+
+          client_max_body_size 256M;
+
+          location / {
+              proxy_pass http://{{ qdrant_ip }}:6333;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
     git_vhost: |
       server {
           listen 443 ssl;
@@ -540,6 +568,30 @@
               add_header Strict-Transport-Security "max-age=31536000" always;
               # Kokoro can stream audio; don't buffer it
               proxy_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    # Embedding server on the LLM VM (:8005) — llama.cpp loaded with
+    # --embedding, OpenAI-compatible /v1/embeddings. Own .lan name because
+    # the app.llm.lan round-robin only covers the four chat shards on
+    # 8001-8004; Open WebUI reaches this over the same trusted TLS.
+    # proxy_pass has no URI part, so /v1/... is forwarded unchanged.
+    embed_vhost: |
+      server {
+          listen 443 ssl;
+          server_name embed.llm.lan;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8005;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              # a batch of document chunks embeds in one request
               proxy_read_timeout 300s;
               proxy_send_timeout 300s;
           }
@@ -885,10 +937,12 @@
         - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
+        - { file: "embed-llm.conf", content: "{{ embed_vhost }}" }
         - { file: "deepseek-llm.conf", content: "{{ deepseek_vhost }}" }
         - { file: "app-taiga.conf", content: "{{ taiga_vhost }}" }
         - { file: "app-git.conf", content: "{{ git_vhost }}" }
         - { file: "app-qdrant.conf", content: "{{ qdrant_vhost }}" }
+        - { file: "embed-qdrant.conf", content: "{{ embed_qdrant_vhost }}" }
       notify: restart nginx
 
     - name: Enable virtual hosts
@@ -908,10 +962,12 @@
         - app-llm.conf
         - stt-llm.conf
         - tts-llm.conf
+        - embed-llm.conf
         - deepseek-llm.conf
         - app-taiga.conf
         - app-git.conf
         - app-qdrant.conf
+        - embed-qdrant.conf
 
     # The distro nginx.conf also declares `access_log /var/log/nginx/access.log;`
     # in the http context — with the json_analytics directive pointing at the
@@ -1039,6 +1095,23 @@
         timeout: 10
       register: nginx_qdrant
       until: nginx_qdrant.status == 401
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # Same proof for the vector vhost, whose point is the LISTENER: it has to
+    # exist on 6333 (that is what makes a port-less qdrant client URL work)
+    # and still route to qdrant's auth middleware.
+    - name: "Verify the vector vhost proxies over https on :6333 (Host: embed.qdrant.lan)"
+      ansible.builtin.uri:
+        url: "https://127.0.0.1:6333/collections"
+        headers:
+          Host: embed.qdrant.lan
+        status_code: [401]
+        validate_certs: false
+        timeout: 10
+      register: nginx_embed_qdrant
+      until: nginx_embed_qdrant.status == 401
       retries: 30
       delay: 10
       changed_when: false

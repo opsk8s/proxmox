@@ -17,6 +17,23 @@
     # https: the gateway serves .lan names over TLS (modules/nginx LAN CA)
     # and the browser blocks the http endpoint from an https page.
     llm_api_base_url: "https://app.llm.lan/v1"
+    # RAG wiring: documents are embedded by the dedicated llama.cpp embedding
+    # server on the LLM VM (embed.llm.lan -> :8005, --embedding mode) and the
+    # vectors are stored in the qdrant VM (REST; the gateway does NOT proxy
+    # qdrant's gRPC port, so PREFER_GRPC is false). RAG_EMBEDDING_MODEL must
+    # match the alias the embedding server was loaded with (embed_alias in
+    # modules/llm).
+    #
+    # No port here, on purpose: qdrant-client rewrites a port-less URL to 6333
+    # (`parsed.port or 6333` — open_webui/retrieval/vector/dbs/qdrant.py, and
+    # again inside QdrantClient), and nginx serves THIS name on :6333
+    # (embed_qdrant_vhost in modules/nginx), so the bare URL reaches it.
+    # app.qdrant.lan is the :443 name — for the dashboard, and for curl.
+    embed_api_base_url: "https://embed.llm.lan/v1"
+    embed_model_name: "Qwen3-Embedding-0.6B"
+    qdrant_url: "https://embed.qdrant.lan"
+    # qdrant_api_key: terraform / Makefile pass it via extra_vars (proxmox.tfvars)
+    qdrant_api_key: ""
 
   tasks:
     - name: Wait for SSH (first boot)
@@ -37,6 +54,15 @@
     - name: Set OS hostname
       ansible.builtin.hostname:
         name: open-webui
+
+    # Without the key Qdrant answers 401 on every RAG call and Open WebUI
+    # silently falls back to keyword-only retrieval — fail early and legibly.
+    - name: Fail early when qdrant_api_key is not provided
+      ansible.builtin.fail:
+        msg: >-
+          Pass qdrant_api_key via the ansible_playbook_run extra_vars in
+          Terraform (qdrant_api_key in proxmox.tfvars)
+      when: qdrant_api_key | length == 0
 
     - name: Install prerequisites
       ansible.builtin.apt:
@@ -195,6 +221,17 @@
       register: webui_upgrade
       changed_when: "'Audited' not in webui_upgrade.stdout"
 
+    # The open-webui wheel ships chromadb but NOT qdrant-client, so
+    # VECTOR_DB=qdrant cannot start without it. Separate from the tasks above
+    # because those only refresh the open-webui package tree.
+    - name: Install the Qdrant client into the venv
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --python {{ webui_venv }}/bin/python qdrant-client"
+      become: true
+      become_user: openwebui
+      register: webui_qdrant_client
+      changed_when: "'Audited' not in webui_qdrant_client.stdout"
+
     - name: Ensure data directory exists (sqlite db, uploads, vector db)
       ansible.builtin.file:
         path: "{{ webui_app_dir }}/data"
@@ -203,12 +240,14 @@
         group: openwebui
         mode: "0755"
 
+    # Mode 0640: the unit carries the Qdrant API key in an Environment= line
+    # (same choice as qdrant.service), so it must not be world-readable.
     - name: Deploy open-webui.service
       ansible.builtin.copy:
         dest: /etc/systemd/system/open-webui.service
         owner: root
         group: root
-        mode: "0644"
+        mode: "0640"
         content: |
           [Unit]
           Description=Open WebUI
@@ -227,6 +266,25 @@
           # OpenAI-compatible endpoint (llama-server on the LLM VM, port 8001)
           Environment=OPENAI_API_BASE_URL={{ llm_api_base_url }}
           Environment=OPENAI_API_KEY=local
+          # RAG: vectors in qdrant, embeddings from the dedicated llama.cpp
+          # embedding server. These env vars are only defaults for Open
+          # WebUI's PersistentConfig — a value edited in Admin Settings is
+          # stored in webui.db and would win over the env var.
+          Environment=VECTOR_DB=qdrant
+          Environment=QDRANT_URI={{ qdrant_url }}
+          Environment=QDRANT_API_KEY={{ qdrant_api_key }}
+          # the gateway proxies qdrant's REST port only (no grpc_pass)
+          Environment=QDRANT_PREFER_GRPC=false
+          Environment=RAG_EMBEDDING_ENGINE=openai
+          Environment=RAG_EMBEDDING_MODEL={{ embed_model_name }}
+          Environment=RAG_OPENAI_API_BASE_URL={{ embed_api_base_url }}
+          Environment=RAG_OPENAI_API_KEY=local
+          # TLS trust for the https:// .lan endpoints above: the venv's httpx
+          # (openai SDK + qdrant client) honours SSL_CERT_FILE, requests
+          # honours REQUESTS_CA_BUNDLE — both otherwise use certifi, which
+          # does not carry the LAN CA installed earlier in this play.
+          Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+          Environment=REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
           # Voice mode: STT + TTS live on the LLM VM as OpenAI-compatible
           # audio endpoints (whisper-server :8085, Kokoro :8086).
           Environment=AUDIO_STT_ENGINE=openai
@@ -246,6 +304,7 @@
 
           [Install]
           WantedBy=multi-user.target
+      notify: restart open-webui
 
     - name: Reload systemd
       ansible.builtin.systemd:
@@ -275,3 +334,65 @@
       retries: 30
       delay: 10
       changed_when: false
+
+    # End-to-end proof of the RAG path using the deployed unit's own config
+    # (parsed from open-webui.service, so a wrong env var fails here) and the
+    # venv's own libraries: embed a probe sentence through the gateway
+    # (embed.llm.lan -> llama.cpp --embedding) and round-trip the vector
+    # through a throwaway qdrant collection, which is removed again. Runs as
+    # root because the unit is 0640 (it carries the API key); the LAN CA is
+    # loaded explicitly because this shell is not the service process.
+    - name: Verify the llama.cpp -> Qdrant RAG path end to end
+      ansible.builtin.shell: |
+        set -euo pipefail
+        {{ webui_venv }}/bin/python - <<'PY'
+        import os
+        from openai import OpenAI
+        from qdrant_client import QdrantClient
+        from qdrant_client.models import Distance, PointStruct, VectorParams
+
+        env = {}
+        for line in open("/etc/systemd/system/open-webui.service"):
+            line = line.strip()
+            if line.startswith("Environment="):
+                k, _, v = line[len("Environment="):].partition("=")
+                env[k] = v
+
+        assert env.get("VECTOR_DB") == "qdrant", env.get("VECTOR_DB")
+        assert env.get("RAG_EMBEDDING_ENGINE") == "openai", env.get("RAG_EMBEDDING_ENGINE")
+        assert env.get("QDRANT_API_KEY"), "QDRANT_API_KEY missing from the unit"
+
+        ca = "/etc/ssl/certs/ca-certificates.crt"
+        os.environ["SSL_CERT_FILE"] = ca
+        os.environ["REQUESTS_CA_BUNDLE"] = ca
+
+        vec = OpenAI(base_url=env["RAG_OPENAI_API_BASE_URL"],
+                     api_key=env["RAG_OPENAI_API_KEY"]) \
+            .embeddings.create(model=env["RAG_EMBEDDING_MODEL"],
+                               input="proxmox rag probe").data[0].embedding
+        assert len(vec) > 100, f"unexpected embedding size {len(vec)}"
+
+        qd = QdrantClient(url=env["QDRANT_URI"], api_key=env["QDRANT_API_KEY"],
+                          prefer_grpc=False)
+        name = "open-webui-rag-probe"
+        if qd.collection_exists(name):
+            qd.delete_collection(name)
+        qd.create_collection(name, vectors_config=VectorParams(size=len(vec),
+                                                               distance=Distance.COSINE))
+        qd.upsert(name, points=[PointStruct(id=1, vector=vec, payload={"probe": True})])
+        hits = qd.query_points(name, query=vec, limit=1).points
+        assert hits and hits[0].id == 1, "qdrant did not return the probe point"
+        qd.delete_collection(name)
+        print(f"ok: {len(vec)}-dim embedding stored and retrieved through qdrant")
+        PY
+      args:
+        executable: /bin/bash
+      become: true
+      changed_when: false
+
+  handlers:
+    - name: restart open-webui
+      ansible.builtin.systemd:
+        name: open-webui
+        state: restarted
+        daemon_reload: true

@@ -42,7 +42,10 @@
     langflow_llm_base_url: "https://app.llm.lan/v1"
     langflow_llm_api_key: "local"
     deepseek_base_url: "https://deepseek.llm.lan/v1"
-    qdrant_url: "https://app.qdrant.lan"
+    # Qdrant via the gateway's :6333 vhost, so the port-less URL is enough:
+    # qdrant-client assumes 6333 when no port is given (app.qdrant.lan is the
+    # :443 name, for the dashboard; curl needs embed.qdrant.lan:6333).
+    qdrant_url: "https://embed.qdrant.lan"
 
   tasks:
     - name: Wait for SSH (first boot)
@@ -343,7 +346,7 @@
           # hosts/IPs/CIDR ranges; lfx prefers narrow FQDNs over ranges
           # (lfx/services/settings/groups/security.py). The bare gateway IP
           # would cover every gateway-served name at once.
-          LANGFLOW_SSRF_ALLOWED_HOSTS=app.llm.lan,deepseek.llm.lan,app.qdrant.lan,app.elastic.lan
+          LANGFLOW_SSRF_ALLOWED_HOSTS=app.llm.lan,deepseek.llm.lan,embed.qdrant.lan,app.elastic.lan
           LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=QDRANT_URL,QDRANT_API_KEY,OPENAI_API_BASE_URL,OPENAI_API_KEY,DEEPSEEK_API_BASE_URL
           QDRANT_URL={{ qdrant_url }}
           QDRANT_API_KEY={{ qdrant_api_key }}
@@ -426,8 +429,8 @@
     - name: Verify the LAN CA validates the gateway leaf for both endpoints
       ansible.builtin.shell: |
         set -euo pipefail
-        for host in app.llm.lan app.qdrant.lan; do
-            echo | openssl s_client -connect "${host}:443" \
+        for host in app.llm.lan:443 embed.qdrant.lan:6333; do
+            echo | openssl s_client -connect "${host}" \
               -CAfile /usr/local/share/ca-certificates/lan-ca.crt 2>/dev/null \
               | grep -q "Verify return code: 0 (ok)"
         done
@@ -453,14 +456,16 @@
       delay: 10
       changed_when: false
 
-    # Proves the vector store wiring end to end: DNS for app.qdrant.lan, the
-    # gateway routing to Qdrant and the API key being accepted (a wrong key
-    # answers 403).
+    # Proves the vector store wiring end to end: DNS for the vector hostname,
+    # the gateway's :6333 vhost routing to Qdrant, and the API key being
+    # accepted (a wrong key answers 403). The :6333 is explicit HERE even
+    # though qdrant_url carries no port — curl honours https -> 443, so
+    # without it this would probe the dashboard vhost instead.
     - name: Verify the Qdrant endpoint answers with the API key
       ansible.builtin.shell: |
         set -euo pipefail
         code=$(curl -sk -o /dev/null -w '%{http_code}' --max-time 10 \
-          -H "api-key: {{ qdrant_api_key }}" {{ qdrant_url }}/collections)
+          -H "api-key: {{ qdrant_api_key }}" {{ qdrant_url }}:6333/collections)
         [ "$code" = "200" ]
       args:
         executable: /bin/bash

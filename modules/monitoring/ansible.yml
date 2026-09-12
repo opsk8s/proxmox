@@ -58,10 +58,11 @@
             - targets: ["{{ langflow_ip }}:9100"]
               labels: {instance_name: "langflow"}
 
-        # llama.cpp servers: native /metrics endpoint (one per GPU)
+        # llama.cpp servers: native /metrics endpoint (one per GPU, plus the
+        # dedicated embedding instance on 8005)
         - job_name: llama
           static_configs:
-            - targets: ["{{ llm_ip }}:8001", "{{ llm_ip }}:8002", "{{ llm_ip }}:8003", "{{ llm_ip }}:8004"]
+            - targets: ["{{ llm_ip }}:8001", "{{ llm_ip }}:8002", "{{ llm_ip }}:8003", "{{ llm_ip }}:8004", "{{ llm_ip }}:8005"]
               labels: {instance_name: "llm-ubuntu"}
 
         - job_name: postgres
