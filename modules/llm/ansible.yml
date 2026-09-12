@@ -19,7 +19,7 @@
     # 1024-dim (qwen3.embedding_length). Vulkan device 2: the four chat
     # shards hold ~22 GB of the 32 GB on cards 0-3 and card 3 additionally
     # hosts whisper + Kokoro (~25 GB used), so 0-2 have the headroom.
-    embed_gpu: "2"
+    embed_gpu: "3"
     embed_port: 8005
     embed_alias: Qwen3-Embedding-0.6B
     embed_model: /mnt/models/Qwen3-Embedding-0.6B-Q8_0.gguf
@@ -528,7 +528,7 @@
         - { port: 8001, device: 0, api: vulkan, context: 131072 }
         - { port: 8002, device: 1, api: vulkan, context: 131072 }
         - { port: 8003, device: 2, api: vulkan, context: 131072 }
-        - { port: 8004, device: 3, api: vulkan, context: 131072 }
+      #  - { port: 8004, device: 3, api: vulkan, context: 131072 }
 
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
@@ -574,14 +574,15 @@
         - { port: 8001 }
         - { port: 8002 }
         - { port: 8003 }
-        - { port: 8004 }
+      #  - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002, 8003]
+      # loop: [8001, 8002, 8003, 8004]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -593,7 +594,8 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001, 8002, 8003]
+      # loop: [8001, 8002, 8003, 8004]
 
     # ===== Embedding server (RAG: Open WebUI -> Qdrant) =====
     # OpenAI-compatible /v1/embeddings on :8005; Open WebUI runs every
