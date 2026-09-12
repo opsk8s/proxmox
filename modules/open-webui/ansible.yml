@@ -25,7 +25,10 @@
     #
     embed_api_base_url: "https://embed.llm.lan/v1"
     embed_model_name: "Qwen3-Embedding-0.6B"
-    qdrant_url: "https://app.qdrant.lan"
+    # :443 must be explicit: qdrant_client drops scheme-default ports and
+    # substitutes its own default (6333), so a bare https URL would dial
+    # the gateway's 6333, where nothing listens.
+    qdrant_url: "https://app.qdrant.lan:443"
     # qdrant_api_key: terraform / Makefile pass it via extra_vars (proxmox.tfvars)
     qdrant_api_key: ""
 
