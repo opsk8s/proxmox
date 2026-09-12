@@ -19,19 +19,13 @@
     llm_api_base_url: "https://app.llm.lan/v1"
     # RAG wiring: documents are embedded by the dedicated llama.cpp embedding
     # server on the LLM VM (embed.llm.lan -> :8005, --embedding mode) and the
-    # vectors are stored in the qdrant VM (REST; the gateway does NOT proxy
-    # qdrant's gRPC port, so PREFER_GRPC is false). RAG_EMBEDDING_MODEL must
-    # match the alias the embedding server was loaded with (embed_alias in
-    # modules/llm).
+    # vectors are stored in the qdrant VM. RAG_EMBEDDING_MODEL must match the
+    # alias the embedding server was loaded with (embed_alias in modules/llm).
+    # PREFER_GRPC is false: the gateway does not proxy qdrant's gRPC port.
     #
-    # No port here, on purpose: qdrant-client rewrites a port-less URL to 6333
-    # (`parsed.port or 6333` — open_webui/retrieval/vector/dbs/qdrant.py, and
-    # again inside QdrantClient), and nginx serves THIS name on :6333
-    # (embed_qdrant_vhost in modules/nginx), so the bare URL reaches it.
-    # app.qdrant.lan is the :443 name — for the dashboard, and for curl.
     embed_api_base_url: "https://embed.llm.lan/v1"
     embed_model_name: "Qwen3-Embedding-0.6B"
-    qdrant_url: "https://embed.qdrant.lan"
+    qdrant_url: "https://app.qdrant.lan"
     # qdrant_api_key: terraform / Makefile pass it via extra_vars (proxmox.tfvars)
     qdrant_api_key: ""
 
@@ -224,13 +218,29 @@
     # The open-webui wheel ships chromadb but NOT qdrant-client, so
     # VECTOR_DB=qdrant cannot start without it. Separate from the tasks above
     # because those only refresh the open-webui package tree.
+    #
+    # Guarded by an installed-version check (like open-webui itself above)
+    # rather than by parsing uv's output: uv writes its status line —
+    # "Checked N packages", or "Audited" on older versions — to STDERR, so a
+    # stdout-based changed_when cannot see it and the task would report
+    # changed on every run.
+    - name: Check whether the Qdrant client is installed in the venv
+      ansible.builtin.command:
+        cmd: >-
+          {{ webui_venv }}/bin/python -c 'import importlib.metadata as m;
+          print(m.version("qdrant-client"))'
+      register: webui_qdrant_installed
+      failed_when: false
+      changed_when: false
+      become: true
+      become_user: openwebui
+
     - name: Install the Qdrant client into the venv
       ansible.builtin.command:
         cmd: "{{ uv_bin }} pip install --python {{ webui_venv }}/bin/python qdrant-client"
       become: true
       become_user: openwebui
-      register: webui_qdrant_client
-      changed_when: "'Audited' not in webui_qdrant_client.stdout"
+      when: webui_qdrant_installed.rc != 0
 
     - name: Ensure data directory exists (sqlite db, uploads, vector db)
       ansible.builtin.file:

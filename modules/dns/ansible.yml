@@ -53,7 +53,6 @@
       - "address=/app.git.lan/{{ nginx_ip }}"
       - "address=/qdrant.lan/{{ qdrant_ip }}"
       - "address=/app.qdrant.lan/{{ nginx_ip }}"
-      - "address=/embed.qdrant.lan/{{ nginx_ip }}"
 
   tasks:
     - name: Wait for SSH (first boot)
