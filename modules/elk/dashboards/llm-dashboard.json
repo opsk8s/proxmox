@@ -1,7 +1,7 @@
 {
   "id": "llm-observability",
   "title": "LLM Observability",
-  "description": "LLM API request/response plane, parsed by the nginx lua capture (body-capture.lua). Request view (llm-request-body-*): the OpenAI-compatible payload per POST. Response view (llm-response-body-*): the completion object per request — an SSE stream is reconstructed into the chat.completion shape, so usage tokens and content are queryable either way. Instance = upstream_addr ip:port (llama-server 8001-8004 behind app.llm.lan).",
+  "description": "LLM API request/response plane, parsed by the nginx lua capture (body-capture.lua). Request view (llm-request-body-*): the OpenAI-compatible payload per POST. Response view (llm-response-body-*): the completion object per request — an SSE stream is reconstructed into the chat.completion shape, so usage tokens and content are queryable either way. Instance = upstream_addr ip:port (llama-server 8001-8003 behind the per-agent vhosts ui-agent / code-swarm-agent / code-smith-agent.llm.lan).",
   "data_views": [
     { "id": "llm-request-body-data-view", "title": "LLM Request Body", "pattern": "llm-request-body-*" },
     { "id": "llm-response-body-data-view", "title": "LLM Response Body", "pattern": "llm-response-body-*" }

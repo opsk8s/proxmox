@@ -518,7 +518,7 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q4 thinking mtp-vision -np 1
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q6 thinking mtp-vision -np 1
           Restart=on-failure
           RestartSec=10
 

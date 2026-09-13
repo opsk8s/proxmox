@@ -1,7 +1,7 @@
 {
   "id": "llm-body-traces",
   "title": "LLM Request Traces",
-  "description": "Per-request view over the LLM body indices. request_id joins the request doc (llm-request-body-*) with the response doc (llm-response-body-*) — one request can span minutes of streaming, so the slowest-request table is keyed on request_time. Request vs response rates expose in-flight/lost requests (the gap). Use the LLM Body Logs (Discover) search to open an individual request_id and read its full request/response payloads. Instance = upstream_addr ip:port (llama-server 8001-8004 behind app.llm.lan).",
+  "description": "Per-request view over the LLM body indices. request_id joins the request doc (llm-request-body-*) with the response doc (llm-response-body-*) — one request can span minutes of streaming, so the slowest-request table is keyed on request_time. Request vs response rates expose in-flight/lost requests (the gap). Use the LLM Body Logs (Discover) search to open an individual request_id and read its full request/response payloads. Instance = upstream_addr ip:port (llama-server 8001-8003 behind the per-agent vhosts ui-agent / code-swarm-agent / code-smith-agent.llm.lan).",
   "data_views": [
     { "id": "llm-request-body-data-view", "title": "LLM Request Body", "pattern": "llm-request-body-*" },
     { "id": "llm-response-body-data-view", "title": "LLM Response Body", "pattern": "llm-response-body-*" }

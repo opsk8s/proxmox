@@ -9,7 +9,7 @@ export LD_LIBRARY_PATH=/opt/rocm/lib:$LD_LIBRARY_PATH
 
 API=${1:-"rocm"}
 PORT=${2:-8001}
-CONTEXT_SIZE=${3:-262144}
+CONTEXT_SIZE=${3:-131072}
 DEVICE_ID=${4:-0,1,2,3}
 MODEL_NAME=${5:-"Qwen3.8-27B"}
 QUANT=${6:-"Q8"}
@@ -25,7 +25,7 @@ case "$QUANT" in
     Q6)   MODEL_QUANT="Q6_K_XL"; KV_CACHE_TYPE="q8_0" ;;
     Q8)   MODEL_QUANT="Q8_K_XL"; KV_CACHE_TYPE="q8_0" ;;
     BF16) MODEL_QUANT="BF16";    KV_CACHE_TYPE="f16"  ;;
-    *)    echo "❌ Error: invalid QUANT '$QUANT' (expected IQ4, Q4, Q6, Q8, or BF16)"; exit 1 ;;
+    *)    echo "❌ Error: invalid QUANT '$QUANT' (expected IQ4, Q4, Q6M, Q6, Q8, or BF16)"; exit 1 ;;
 esac
 
 MODELS_HOME="/mnt/models"
@@ -122,14 +122,14 @@ usage() {
     echo "  $0 rocm 8001 $CONTEXT_SIZE 2,3 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo "  $0 rocm 8002 $CONTEXT_SIZE 0,1 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo "  # Run Q4 (Q4_K_XL model, q4_0 KV cache) on a single device at ports 8001-8004"
-    echo "  $0 rocm 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 rocm 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 rocm 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 rocm 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
-    echo "  $0 vulkan 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q4 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 rocm 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8001 $CONTEXT_SIZE 0 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8002 $CONTEXT_SIZE 1 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8003 $CONTEXT_SIZE 2 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
+    echo "  $0 vulkan 8004 $CONTEXT_SIZE 3 Qwen3.8-27B Q6 thinking mtp-vision -np 1"
     echo ""
     exit 1
 }

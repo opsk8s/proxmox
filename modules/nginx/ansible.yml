@@ -7,7 +7,9 @@
 #   app.jenkins.lan                    -> jenkins:8080
 #   app.open-webui.lan                 -> open-webui:8080
 #   app.langflow.lan                   -> langflow:7860 (visual agent/flow builder)
-#   app.llm.lan                        -> llm:8001-8004 (round robin)
+#   ui-agent.llm.lan                   -> llm:8001
+#   code-swarm-agent.llm.lan           -> llm:8002
+#   code-smith-agent.llm.lan           -> llm:8003
 #   deepseek.llm.lan                   -> api.deepseek.com (TLS upstream, body capture)
 #   app.taiga.lan                      -> taiga:8000/8003/8080/8888 (per-location)
 #
@@ -82,7 +84,9 @@
       - app.jenkins.lan
       - app.open-webui.lan
       - app.langflow.lan
-      - app.llm.lan
+      - ui-agent.llm.lan
+      - code-swarm-agent.llm.lan
+      - code-smith-agent.llm.lan
       - stt.llm.lan
       - tts.llm.lan
       - embed.llm.lan
@@ -442,19 +446,14 @@
           }
       }
 
-    # llama-server: round robin over the four per-GPU instances. Buffering is
-    # off so SSE token streams are flushed to the client as they arrive.
-    llm_vhost: |
-      upstream llm_pool {
-          server {{ llm_ip }}:8001;
-          server {{ llm_ip }}:8002;
-          server {{ llm_ip }}:8003;
-          server {{ llm_ip }}:8004;
-      }
-
+    # LLM agents: one llama-server per GPU, each behind its own .lan name —
+    # clients pick the agent explicitly, there is no round-robin pool.
+    # Buffering is off so SSE token streams are flushed to the client as
+    # they arrive.
+    ui_agent_llm_vhost: |
       server {
           listen 443 ssl;
-          server_name app.llm.lan;
+          server_name ui-agent.llm.lan;
           # nginx default is 1M: agentic clients (multi-turn context, vision
           # images, tool payloads) outgrow it fast. Same 100M as app-taiga.
           # 2026-09-08 saw "client intended to send too large body" 413s at
@@ -462,7 +461,7 @@
           client_max_body_size 100M;
 
           location / {
-              proxy_pass http://llm_pool;
+              proxy_pass http://{{ llm_ip }}:8001;
               proxy_http_version 1.1;
               proxy_set_header Host $host;
               proxy_set_header X-Real-IP $remote_addr;
@@ -474,8 +473,8 @@
               # it (plus the serving instance) back in the response.
               # request_id already links nginx-access-* to the
               # llm-request-body-* / llm-response-body-* captures via the
-              # same $request_id; X-Upstream exposes which llama-server
-              # instance (llm_pool round-robin) actually served the request.
+              # same $request_id; X-Upstream exposes the serving
+              # llama-server's ip:port.
               proxy_set_header X-Request-Id $request_id;
               # local add_headers disable http-context inheritance, so the
               # HSTS header must be repeated here
@@ -500,11 +499,69 @@
           }
       }
 
+    code_swarm_agent_llm_vhost: |
+      server {
+          listen 443 ssl;
+          server_name code-swarm-agent.llm.lan;
+          client_max_body_size 100M;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8002;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_set_header X-Request-Id $request_id;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              add_header X-Request-Id $request_id always;
+              add_header X-Upstream $upstream_addr always;
+              proxy_buffering off;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+
+              access_by_lua_file      /etc/nginx/lua/body-capture.lua;
+              body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
+              log_by_lua_file         /etc/nginx/lua/body-capture.lua;
+          }
+      }
+
+    code_smith_agent_llm_vhost: |
+      server {
+          listen 443 ssl;
+          server_name code-smith-agent.llm.lan;
+          client_max_body_size 100M;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8003;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_set_header X-Request-Id $request_id;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              add_header X-Request-Id $request_id always;
+              add_header X-Upstream $upstream_addr always;
+              proxy_buffering off;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+
+              access_by_lua_file      /etc/nginx/lua/body-capture.lua;
+              body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
+              log_by_lua_file         /etc/nginx/lua/body-capture.lua;
+          }
+      }
+
     # Voice-mode audio services on the LLM VM: whisper.cpp STT on 8085
     # (OpenAI-compatible /v1/audio/transcriptions) and Kokoro-FastAPI TTS on
     # 8086 (/v1/audio/speech). Each gets its own .lan name so Open WebUI can
-    # reach it over the same trusted TLS as app.llm.lan. proxy_pass has no
-    # URI part, so the original path is forwarded unchanged.
+    # reach it over the same trusted TLS as the LLM agent vhosts. proxy_pass
+    # has no URI part, so the original path is forwarded unchanged.
     stt_vhost: |
       server {
           listen 443 ssl;
@@ -548,9 +605,9 @@
 
     # Embedding server on the LLM VM (:8005) — llama.cpp loaded with
     # --embedding, OpenAI-compatible /v1/embeddings. Own .lan name because
-    # the app.llm.lan round-robin only covers the four chat shards on
-    # 8001-8004; Open WebUI reaches this over the same trusted TLS.
-    # proxy_pass has no URI part, so /v1/... is forwarded unchanged.
+    # the LLM agent names only cover the chat shards on 8001-8003; Open
+    # WebUI reaches this over the same trusted TLS. proxy_pass has no URI
+    # part, so /v1/... is forwarded unchanged.
     embed_vhost: |
       server {
           listen 443 ssl;
@@ -571,7 +628,8 @@
       }
 
     # DeepSeek API proxied over the same trusted TLS and body capture as
-    # app.llm.lan. It is OpenAI-compatible, so the lua capture parses
+    # the LLM agent vhosts. It is OpenAI-compatible, so the lua capture
+    # parses
     # requests/responses (SSE included) into the same llm-request.log /
     # llm-response.log; documents carry host=deepseek.llm.lan. proxy_pass
     # has no URI part, so /v1/... paths reach the API unchanged. The
@@ -582,7 +640,8 @@
       server {
           listen 443 ssl;
           server_name deepseek.llm.lan;
-          # Same ceiling as app.llm.lan: agentic clients push big contexts
+          # Same ceiling as the LLM agent vhosts: agentic clients push big
+          # contexts
           client_max_body_size 100M;
 
           location / {
@@ -602,9 +661,10 @@
               proxy_read_timeout 3600s;
               proxy_send_timeout 3600s;
 
-              # Same capture as app.llm.lan: request + response bodies of
-              # JSON API POSTs into llm-request.log / llm-response.log
-              # (shipped to llm-request-body-* / llm-response-body-*).
+              # Same capture as the LLM agent vhosts: request + response
+              # bodies of JSON API POSTs into llm-request.log /
+              # llm-response.log (shipped to llm-request-body-* /
+              # llm-response-body-*).
               access_by_lua_file      /etc/nginx/lua/body-capture.lua;
               body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
               log_by_lua_file         /etc/nginx/lua/body-capture.lua;
@@ -907,7 +967,9 @@
         - { file: "app-jenkins.conf", content: "{{ jenkins_vhost }}" }
         - { file: "app-open-webui.conf", content: "{{ open_webui_vhost }}" }
         - { file: "app-langflow.conf", content: "{{ langflow_vhost }}" }
-        - { file: "app-llm.conf", content: "{{ llm_vhost }}" }
+        - { file: "ui-agent-llm.conf", content: "{{ ui_agent_llm_vhost }}" }
+        - { file: "code-swarm-agent-llm.conf", content: "{{ code_swarm_agent_llm_vhost }}" }
+        - { file: "code-smith-agent-llm.conf", content: "{{ code_smith_agent_llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
         - { file: "embed-llm.conf", content: "{{ embed_vhost }}" }
@@ -931,7 +993,9 @@
         - app-jenkins.conf
         - app-open-webui.conf
         - app-langflow.conf
-        - app-llm.conf
+        - ui-agent-llm.conf
+        - code-swarm-agent-llm.conf
+        - code-smith-agent-llm.conf
         - stt-llm.conf
         - tts-llm.conf
         - embed-llm.conf
@@ -939,6 +1003,19 @@
         - app-taiga.conf
         - app-git.conf
         - app-qdrant.conf
+
+    # app.llm.lan (round-robin llm_pool over 8001-8004) was replaced by the
+    # per-agent names on 2026-09-13. The old conf must go — it references the
+    # llm_pool upstream, which no longer exists, so `nginx -t` fails while
+    # the file is present (one-shot cleanup, idempotent).
+    - name: Remove the retired app-llm.conf vhost
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/nginx/sites-enabled/app-llm.conf
+        - /etc/nginx/sites-available/app-llm.conf
+      notify: restart nginx
 
     # The distro nginx.conf also declares `access_log /var/log/nginx/access.log;`
     # in the http context — with the json_analytics directive pointing at the
@@ -1071,14 +1148,14 @@
       changed_when: false
 
     # Any HTTP response works (even a 4xx/502 from llama) — the capture hooks
-    # in the llm location run on POST+json requests regardless of status, so a
-    # match in llm-request.log proves the lua script ran end to end (bodies.log
-    # was the pre-2026-09-08 single-file format; the split capture writes
-    # llm-request.log / llm-response.log).
-    - name: Verify body capture records a JSON POST through the llm vhost
+    # in the agent location run on POST+json requests regardless of status, so
+    # a match in llm-request.log proves the lua script ran end to end
+    # (bodies.log was the pre-2026-09-08 single-file format; the split
+    # capture writes llm-request.log / llm-response.log).
+    - name: Verify body capture records a JSON POST through an LLM agent vhost
       ansible.builtin.shell: |
         set -euo pipefail
-        curl -sk -o /dev/null -X POST -H 'Host: app.llm.lan' \
+        curl -sk -o /dev/null -X POST -H 'Host: ui-agent.llm.lan' \
           -H 'Content-Type: application/json' \
           --data '{"capture_probe":true}' \
           https://127.0.0.1/health

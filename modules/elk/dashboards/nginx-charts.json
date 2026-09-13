@@ -44,10 +44,10 @@
   {
     "viz_id": "nginx-request-rate-instance",
     "title": "Requests per LLM instance",
-    "description": "requests to app.llm.lan per upstream instance (llm_pool round-robin; upstream_addr ip:port)",
+    "description": "requests to the LLM agent vhosts (ui-agent / code-swarm-agent / code-smith-agent.llm.lan) per upstream instance (upstream_addr ip:port)",
     "chart": "area",
     "filters": [
-      { "field": "host.keyword", "value": "app.llm.lan" }
+      { "raw": "host.keyword:ui-agent.llm.lan OR host.keyword:code-swarm-agent.llm.lan OR host.keyword:code-smith-agent.llm.lan" }
     ],
     "splits": [
       { "field": "upstream_addr.keyword" }
@@ -59,10 +59,10 @@
   {
     "viz_id": "nginx-response-time-instance",
     "title": "Response time per LLM instance (s)",
-    "description": "avg/max nginx request_time per upstream instance serving app.llm.lan",
+    "description": "avg/max nginx request_time per upstream instance serving the LLM agent vhosts",
     "chart": "line",
     "filters": [
-      { "field": "host.keyword", "value": "app.llm.lan" }
+      { "raw": "host.keyword:ui-agent.llm.lan OR host.keyword:code-swarm-agent.llm.lan OR host.keyword:code-smith-agent.llm.lan" }
     ],
     "splits": [
       { "field": "upstream_addr.keyword" }

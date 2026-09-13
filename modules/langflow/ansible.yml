@@ -35,11 +35,13 @@
     langflow_db_password: ""
     # Endpoints handed to flows as global variables (credential type, i.e.
     # masked in the visual editor). Both LLM endpoints are OpenAI-compatible
-    # and served by the gateway over the trusted .lan TLS: app.llm.lan is the
-    # llama.cpp pool on the LLM VM, deepseek.llm.lan the DeepSeek proxy. The
+    # and served by the gateway over the trusted .lan TLS: the default is
+    # the code-swarm-agent llama.cpp server on the LLM VM (8002; the other
+    # agents sit at ui-agent.llm.lan / code-smith-agent.llm.lan and are in
+    # the SSRF allowlist below), deepseek.llm.lan the DeepSeek proxy. The
     # real DeepSeek API key is entered in the UI (it is the user's own
     # credential); nothing here stores it.
-    langflow_llm_base_url: "https://app.llm.lan/v1"
+    langflow_llm_base_url: "https://code-swarm-agent.llm.lan/v1"
     langflow_llm_api_key: "local"
     deepseek_base_url: "https://deepseek.llm.lan/v1"
     # qdrant-client takes the port from the URL when one is given and falls
@@ -345,7 +347,7 @@
           # hosts/IPs/CIDR ranges; lfx prefers narrow FQDNs over ranges
           # (lfx/services/settings/groups/security.py). The bare gateway IP
           # would cover every gateway-served name at once.
-          LANGFLOW_SSRF_ALLOWED_HOSTS=app.llm.lan,deepseek.llm.lan,app.qdrant.lan,app.elastic.lan
+          LANGFLOW_SSRF_ALLOWED_HOSTS=ui-agent.llm.lan,code-swarm-agent.llm.lan,code-smith-agent.llm.lan,deepseek.llm.lan,app.qdrant.lan,app.elastic.lan
           LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=QDRANT_URL,QDRANT_API_KEY,OPENAI_API_BASE_URL,OPENAI_API_KEY,DEEPSEEK_API_BASE_URL
           QDRANT_URL={{ qdrant_url }}
           QDRANT_API_KEY={{ qdrant_api_key }}
@@ -428,7 +430,7 @@
     - name: Verify the LAN CA validates the gateway leaf for both endpoints
       ansible.builtin.shell: |
         set -euo pipefail
-        for host in app.llm.lan:443 app.qdrant.lan:443; do
+        for host in code-swarm-agent.llm.lan:443 app.qdrant.lan:443; do
             echo | openssl s_client -connect "${host}" \
               -CAfile /usr/local/share/ca-certificates/lan-ca.crt 2>/dev/null \
               | grep -q "Verify return code: 0 (ok)"

@@ -11,12 +11,13 @@
     uv_bin: /home/openwebui/.local/bin/uv
     webui_port: 8080
     # webui_ip / llm_ip: terraform passes them via extra_vars (proxmox.tfvars)
-    # OpenAI-compatible endpoint: llama-server on GPU0 of the LLM VM. The 4
-    # llama.cpp servers run directly on 8001-8004 (one per GPU, same model,
-    # see modules/llm/ansible.yml); load balancing is left to the caller.
+    # OpenAI-compatible endpoint: the ui-agent llama-server (GPU0) of the
+    # LLM VM, reached through the per-agent gateway vhost. There is no
+    # round-robin pool — each llama.cpp server (8001-8003, one per GPU, see
+    # modules/llm/ansible.yml) sits behind its own .lan name.
     # https: the gateway serves .lan names over TLS (modules/nginx LAN CA)
     # and the browser blocks the http endpoint from an https page.
-    llm_api_base_url: "https://app.llm.lan/v1"
+    llm_api_base_url: "https://ui-agent.llm.lan/v1"
     # RAG wiring: documents are embedded by the dedicated llama.cpp embedding
     # server on the LLM VM (embed.llm.lan -> :8005, --embedding mode) and the
     # vectors are stored in the qdrant VM. RAG_EMBEDDING_MODEL must match the

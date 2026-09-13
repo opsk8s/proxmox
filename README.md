@@ -59,7 +59,7 @@ Run on the nginx VM as root (this is exactly what the playbook's
 ```bash
 CA=/etc/lan-ca
 CERT=/etc/nginx/certs
-DOMAINS="app.kibana.lan app.elk.lan app.elastic.lan app.grafana.lan app.prometheus.lan app.jenkins.lan app.open-webui.lan app.llm.lan app.taiga.lan"
+DOMAINS="app.kibana.lan app.elk.lan app.elastic.lan app.grafana.lan app.prometheus.lan app.jenkins.lan app.open-webui.lan ui-agent.llm.lan code-swarm-agent.llm.lan code-smith-agent.llm.lan app.taiga.lan"
 
 mkdir -p "$CA" "$CERT" && chmod 700 "$CA" "$CERT"
 
@@ -119,7 +119,7 @@ curl -fs -H "x-lan-ca-token: $LAN_CA_TOKEN" \
 ```
 
 The VM playbooks in this repo (e.g. `modules/open-webui`, which calls
-`app.llm.lan` over TLS) receive the token as an extra var, fetch and install
+`ui-agent.llm.lan` over TLS) receive the token as an extra var, fetch and install
 the root automatically — the manual steps above are for machines outside
 the repo.
 
