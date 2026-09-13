@@ -62,7 +62,7 @@
         # dedicated embedding instance on 8005)
         - job_name: llama
           static_configs:
-            - targets: ["{{ llm_ip }}:8001", "{{ llm_ip }}:8002", "{{ llm_ip }}:8003", "{{ llm_ip }}:8004", "{{ llm_ip }}:8005"]
+            - targets: ["{{ llm_ip }}:8001", "{{ llm_ip }}:8002", "{{ llm_ip }}:8003", "{{ llm_ip }}:8005"]
               labels: {instance_name: "llm-ubuntu"}
 
         - job_name: postgres
@@ -101,7 +101,9 @@
               labels: {instance_name: "open-webui"}
             - targets: ["http://{{ elk_ip }}:9200/", "http://{{ elk_ip }}:5601/"]
               labels: {instance_name: "elk"}
-            # default_server on the proxy answers 200 "nginx proxy alive"
+            # The gateway's default vhost 301s plain HTTP -> https (the 200
+            # "nginx proxy alive" answer is TLS-only); probed with the
+            # http_2xx_3xx module via the relabel override below.
             - targets: ["http://{{ nginx_ip }}:80/"]
               labels: {instance_name: "nginx"}
             - targets: ["http://{{ taiga_ip }}:8080/"]
@@ -115,6 +117,13 @@
               target_label: __param_target
             - source_labels: [__param_target]
               target_label: instance
+            # The gateway target gets the redirect-tolerant module: its
+            # default vhost 301s plain HTTP -> https, and that redirect IS
+            # the healthy answer. (Must follow the __param_target rule above.)
+            - source_labels: [__param_target]
+              regex: "http://{{ nginx_ip }}:80/"
+              target_label: __param_module
+              replacement: http_2xx_3xx
             - target_label: __address__
               replacement: 127.0.0.1:9115
 
@@ -142,6 +151,19 @@
           http:
             valid_status_codes: [200, 201, 204]
             method: GET
+
+        # Redirect-tolerant variant for the nginx gateway target: its default
+        # vhost 301s plain HTTP -> https, so the redirect is the healthy
+        # answer. no_follow_redirects is essential — following it lands on
+        # TLS signed by the LAN CA, which this VM does not trust, so the
+        # probe would fail on certificate verification.
+        http_2xx_3xx:
+          prober: http
+          timeout: 10s
+          http:
+            valid_status_codes: [200, 201, 204, 301, 302]
+            method: GET
+            no_follow_redirects: true
 
         dns_udp:
           prober: dns
