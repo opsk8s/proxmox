@@ -24,6 +24,19 @@
     embed_alias: Qwen3-Embedding-0.6B
     embed_model: /mnt/models/Qwen3-Embedding-0.6B-Q8_0.gguf
     embed_model_url: "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf"
+
+    # German Kokoro TTS (kikiri-tts per-speaker fine-tunes). Base Kokoro has no
+    # German (no lang_code 'd'), so these run a SECOND Kokoro-FastAPI checkout
+    # whose venv has the German `kokoro` fork (adds lang_code 'd') and the
+    # `misaki[de]` fork (German G2P) installed over the stock packages. ONE
+    # checkout/venv serves both speakers; each unit picks its model + voice via
+    # env. English is untouched on the base-model instance (kokoro.service, 8086).
+    kokoro_de_dir: /home/llm/kokoro-fastapi-de
+    kokoro_de_fork: "git+https://github.com/semidark/kokoro.git@main"
+    kokoro_de_misaki: "git+https://github.com/semidark/misaki.git@main"
+    kokoro_de_instances:
+      - { name: martin,   port: 8087, model_repo: kikiri-tts/kikiri-german-martin,   model_file: kikiri_german_martin_ep10.pth,   voice: dm_martin,   voice_src: voices/martin.pt }
+      - { name: victoria, port: 8088, model_repo: kikiri-tts/kikiri-german-victoria, model_file: kikiri_german_victoria_ep10.pth, voice: dv_victoria, voice_src: voices/victoria.pt }
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -693,7 +706,9 @@
     # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
     # Open WebUI talks to these as OpenAI-compatible audio endpoints:
     #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server)
-    #   TTS -> http://<llm_ip>:8086/v1/audio/speech        (Kokoro-FastAPI)
+    #   TTS -> http://<llm_ip>:8086/v1/audio/speech        (Kokoro, English)
+    #        http://<llm_ip>:8087/v1/audio/speech        (Kokoro, German Martin)
+    #        http://<llm_ip>:8088/v1/audio/speech        (Kokoro, German Victoria)
     # whisper.cpp's server is NOT OpenAI-compatible natively (its route is
     # /inference), so it is registered at /v1/audio/transcriptions via
     # --request-path/--inference-path; it still returns {"text": "..."}.
@@ -856,6 +871,171 @@
           WantedBy=multi-user.target
       notify: restart kokoro
 
+    # ===== German Kokoro TTS (kikiri-tts fine-tunes, :8087 Martin / :8088 Victoria) =====
+    # Base Kokoro has no lang_code 'd', so this is a second Kokoro-FastAPI
+    # checkout whose venv carries the German `kokoro` + `misaki[de]` forks. The
+    # two speakers share that venv; each systemd unit selects its model + voice
+    # via env. Models are laid out as <MODEL_DIR>/v1_0/kokoro-v1_0.pth (the
+    # path Kokoro-FastAPI hardcodes) plus the Kokoro-82M config.json beside it.
+    - name: Clone Kokoro-FastAPI (German)
+      ansible.builtin.git:
+        repo: 'https://github.com/remsky/Kokoro-FastAPI.git'
+        dest: "{{ kokoro_de_dir }}"
+        version: master
+        # clone once: .venv + downloaded models live inside the checkout.
+        update: false
+      become: true
+      become_user: llm
+
+    - name: Install German Kokoro-FastAPI dependencies (torch excluded)
+      ansible.builtin.command:
+        cmd: /home/llm/.local/bin/uv sync --extra cpu --no-install-package torch
+      args:
+        chdir: "{{ kokoro_de_dir }}"
+      become: true
+      become_user: llm
+      # Same as the English instance: uv sync self-heals a half-built venv, and
+      # torch is excluded so the next task's ROCm wheel is not reverted.
+      changed_when: false
+
+    - name: Install ROCm PyTorch into the German Kokoro venv (gfx1201)
+      ansible.builtin.command:
+        cmd: >-
+          /home/llm/.local/bin/uv pip install
+          --python {{ kokoro_de_dir }}/.venv/bin/python
+          --index-url https://stable.repo.amd.com/rocm/whl-next/
+          "rocm[libraries,device-gfx1201]==10.0.0"
+          "torch[device-gfx1201]==2.12.0+rocm10.0.0"
+      become: true
+      become_user: llm
+      changed_when: false
+
+    # German G2P needs misaki[de] (DEG2P -> phonemizer-fork + espeakng-loader);
+    # lang_code 'd' needs the German kokoro fork. Both are semidark forks that
+    # REPLACE the stock packages uv sync just installed. misaki goes first (it
+    # pulls the [de] extras); kokoro goes in --no-deps so it does NOT
+    # re-resolve its declared misaki[en]/torch deps back to the PyPI stock/CPU
+    # builds. The ROCm torch from the previous task satisfies kokoro's torch.
+    - name: Install the German misaki[de] fork
+      ansible.builtin.command:
+        cmd: >-
+          /home/llm/.local/bin/uv pip install
+          --python {{ kokoro_de_dir }}/.venv/bin/python
+          "misaki[de] @ {{ kokoro_de_misaki }}"
+      become: true
+      become_user: llm
+      changed_when: false
+
+    - name: Install the German kokoro fork (lang_code 'd')
+      ansible.builtin.command:
+        cmd: >-
+          /home/llm/.local/bin/uv pip install --no-deps
+          --python {{ kokoro_de_dir }}/.venv/bin/python
+          "kokoro @ {{ kokoro_de_fork }}"
+      become: true
+      become_user: llm
+      changed_when: false
+
+    # get_url does NOT create parent directories (unlike copy/template/file),
+    # so build the per-speaker trees first: model + config.json share
+    # models-<name>/v1_0, the voice lives in voices-<name>.
+    - name: Create the German model directories
+      ansible.builtin.file:
+        path: "{{ kokoro_de_dir }}/models-{{ item.name }}/v1_0"
+        state: directory
+        owner: llm
+        group: llm
+        mode: "0755"
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Create the German voice directories
+      ansible.builtin.file:
+        path: "{{ kokoro_de_dir }}/voices-{{ item.name }}"
+        state: directory
+        owner: llm
+        group: llm
+        mode: "0755"
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Download the German Kokoro models (kikiri-tts fine-tunes)
+      ansible.builtin.get_url:
+        url: "https://huggingface.co/{{ item.model_repo }}/resolve/main/{{ item.model_file }}"
+        dest: "{{ kokoro_de_dir }}/models-{{ item.name }}/v1_0/kokoro-v1_0.pth"
+        owner: llm
+        group: llm
+        mode: "0644"
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Download the German voicepacks
+      ansible.builtin.get_url:
+        url: "https://huggingface.co/{{ item.model_repo }}/resolve/main/{{ item.voice_src }}"
+        dest: "{{ kokoro_de_dir }}/voices-{{ item.name }}/{{ item.voice }}.pt"
+        owner: llm
+        group: llm
+        mode: "0644"
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # The fine-tunes are Kokoro-82M in architecture, so the base model's
+    # config.json describes them. KModel reads config.json from the model's
+    # directory, so it must sit next to each kokoro-v1_0.pth.
+    - name: Download the Kokoro-82M config.json (shared by the fine-tunes)
+      ansible.builtin.get_url:
+        url: "https://huggingface.co/hexgrad/Kokoro-82M/resolve/main/config.json"
+        dest: "{{ kokoro_de_dir }}/models-{{ item.name }}/v1_0/config.json"
+        owner: llm
+        group: llm
+        mode: "0644"
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Deploy the German Kokoro TTS systemd units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/kokoro-de-{{ item.name }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Kokoro TTS German - {{ item.name }} (OpenAI-compatible /v1/audio/speech, ROCm GPU)
+          After=network-online.target amd-gpu-profile.service
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User=llm
+          Group=llm
+          WorkingDirectory={{ kokoro_de_dir }}
+          Environment=HOME=/home/llm
+          Environment=MODEL_DIR={{ kokoro_de_dir }}/models-{{ item.name }}
+          Environment=VOICES_DIR={{ kokoro_de_dir }}/voices-{{ item.name }}
+          Environment=MODEL_REPO_ID=hexgrad/Kokoro-82M
+          # Voice files are named dm_martin / dv_victoria (leading 'd' = German),
+          # and DEFAULT_VOICE_CODE pins the pipeline to lang_code 'd' regardless.
+          Environment=DEFAULT_VOICE={{ item.voice }}
+          Environment=DEFAULT_VOICE_CODE=d
+          Environment=USE_GPU=true
+          Environment=HIP_VISIBLE_DEVICES={{ kokoro_gpu }}
+          Environment=HSA_TOOLS_DISABLE_REGISTER=1
+          ExecStart={{ kokoro_de_dir }}/.venv/bin/uvicorn api.src.main:app --host 0.0.0.0 --port {{ item.port }}
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+      notify: "restart kokoro-de-{{ item.name }}"
+
     - name: Reload systemd to pick up the voice-mode units
       ansible.builtin.systemd:
         daemon_reload: true
@@ -872,12 +1052,47 @@
         state: started
         enabled: true
 
+    - name: Enable and start the German Kokoro instances
+      ansible.builtin.systemd:
+        name: "kokoro-de-{{ item.name }}"
+        state: started
+        enabled: true
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
+
     - name: Wait for the voice-mode ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 300
-      loop: [8085, 8086]
+      loop: [8085, 8086, 8087, 8088]
+
+    # End-to-end German check: synthesize a short clip per instance and require
+    # HTTP 200. model 'kokoro' is a valid name for the OpenAI-compat endpoint
+    # (maps to v1_0/kokoro-v1_0.pth under MODEL_DIR); lang_code 'd' forces the
+    # German pipeline; voice must match the deployed .pt file name.
+    - name: Probe the German TTS instances
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ item.port }}/v1/audio/speech"
+        method: POST
+        body_format: json
+        body:
+          model: kokoro
+          input: "Hallo, dies ist ein Test der deutschen Sprachausgabe."
+          voice: "{{ item.voice }}"
+          lang_code: d
+          response_format: mp3
+        status_code: 200
+        timeout: 120
+      register: kokoro_de_probe
+      until: kokoro_de_probe.status == 200
+      retries: 10
+      delay: 10
+      changed_when: false
+      loop: "{{ kokoro_de_instances }}"
+      loop_control:
+        label: "{{ item.name }}"
 
   handlers:
     - name: reload udev
@@ -886,6 +1101,16 @@
     - name: restart kokoro
       ansible.builtin.systemd:
         name: kokoro
+        state: restarted
+
+    - name: restart kokoro-de-martin
+      ansible.builtin.systemd:
+        name: kokoro-de-martin
+        state: restarted
+
+    - name: restart kokoro-de-victoria
+      ansible.builtin.systemd:
+        name: kokoro-de-victoria
         state: restarted
 
     - name: restart whisper-server
