@@ -89,6 +89,8 @@
       - code-smith-agent.llm.lan
       - stt.llm.lan
       - tts.llm.lan
+      - tts-de-martin.llm.lan
+      - tts-de-victoria.llm.lan
       - embed.llm.lan
       - deepseek.llm.lan
       - app.taiga.lan
@@ -603,6 +605,50 @@
           }
       }
 
+    # German Kokoro-FastAPI instances on the LLM VM: Martin on 8087 and
+    # Victoria on 8088. Cloned from tts_vhost (same no-buffer + 300s audio
+    # timeouts); each gets its own .lan name so Open WebUI can pick a
+    # German voice by switching AUDIO_TTS_OPENAI_API_BASE_URL.
+    tts_de_martin_vhost: |
+      server {
+          listen 443 ssl;
+          server_name tts-de-martin.llm.lan;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8087;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              # Kokoro can stream audio; don't buffer it
+              proxy_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
+    tts_de_victoria_vhost: |
+      server {
+          listen 443 ssl;
+          server_name tts-de-victoria.llm.lan;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8088;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              # Kokoro can stream audio; don't buffer it
+              proxy_buffering off;
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
     # Embedding server on the LLM VM (:8005) — llama.cpp loaded with
     # --embedding, OpenAI-compatible /v1/embeddings. Own .lan name because
     # the LLM agent names only cover the chat shards on 8001-8003; Open
@@ -972,6 +1018,8 @@
         - { file: "code-smith-agent-llm.conf", content: "{{ code_smith_agent_llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
+        - { file: "tts-de-martin-llm.conf", content: "{{ tts_de_martin_vhost }}" }
+        - { file: "tts-de-victoria-llm.conf", content: "{{ tts_de_victoria_vhost }}" }
         - { file: "embed-llm.conf", content: "{{ embed_vhost }}" }
         - { file: "deepseek-llm.conf", content: "{{ deepseek_vhost }}" }
         - { file: "app-taiga.conf", content: "{{ taiga_vhost }}" }

@@ -48,6 +48,8 @@
       - "address=/code-smith-agent.llm.lan/{{ nginx_ip }}"
       - "address=/stt.llm.lan/{{ nginx_ip }}"
       - "address=/tts.llm.lan/{{ nginx_ip }}"
+      - "address=/tts-de-martin.llm.lan/{{ nginx_ip }}"
+      - "address=/tts-de-victoria.llm.lan/{{ nginx_ip }}"
       - "address=/embed.llm.lan/{{ nginx_ip }}"
       - "address=/deepseek.llm.lan/{{ nginx_ip }}"
       - "address=/app.taiga.lan/{{ nginx_ip }}"
