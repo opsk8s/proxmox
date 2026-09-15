@@ -1046,11 +1046,14 @@
         - code-smith-agent-llm.conf
         - stt-llm.conf
         - tts-llm.conf
+        - tts-de-martin-llm.conf
+        - tts-de-victoria-llm.conf
         - embed-llm.conf
         - deepseek-llm.conf
         - app-taiga.conf
         - app-git.conf
         - app-qdrant.conf
+      notify: restart nginx
 
     # app.llm.lan (round-robin llm_pool over 8001-8004) was replaced by the
     # per-agent names on 2026-09-13. The old conf must go — it references the
