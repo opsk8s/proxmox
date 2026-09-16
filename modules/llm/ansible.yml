@@ -509,40 +509,6 @@
         executable: /bin/bash
       when: fluent_bit_shipper.stat.exists
 
-    # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
-    # so the unit is Type=forking. The script's pre-flight kills any stale instance
-    # on the port, which also makes systemctl restart behave.
-    - name: Deploy llama-server systemd units (one per GPU/port)
-      ansible.builtin.copy:
-        dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
-        owner: root
-        group: root
-        mode: "0644"
-        content: |
-          [Unit]
-          Description=llama.cpp server (port {{ item.port }}, GPU {{ item.device }})
-          After=network-online.target mnt-models.mount
-          Wants=network-online.target
-
-          [Service]
-          Type=forking
-          PIDFile=/home/llm/logs/llama_server_port_{{ item.port }}.pid
-          User=llm
-          Group=llm
-          WorkingDirectory=/home/llm
-          Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q6 thinking mtp-vision -np 1
-          Restart=on-failure
-          RestartSec=10
-
-          [Install]
-          WantedBy=multi-user.target
-      loop:
-        - { port: 8001, device: 0, api: vulkan, context: 131072 }
-        - { port: 8002, device: 1, api: vulkan, context: 131072 }
-        - { port: 8003, device: 2, api: vulkan, context: 131072 }
-      #  - { port: 8004, device: 3, api: vulkan, context: 131072 }
-
     # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
     # resets them), so pin them with a oneshot unit that runs on every boot,
     # ordered before the llama-server units. /usr/bin/amd-smi is used because
@@ -578,6 +544,39 @@
         state: started
         enabled: true
 
+    # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
+    # so the unit is Type=forking. The script's pre-flight kills any stale instance
+    # on the port, which also makes systemctl restart behave.
+    - name: Deploy llama-server systemd units (one per GPU/port)
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=llama.cpp server (port {{ item.port }}, GPU {{ item.device }})
+          After=network-online.target mnt-models.mount
+          Wants=network-online.target
+
+          [Service]
+          Type=forking
+          PIDFile=/home/llm/logs/llama_server_port_{{ item.port }}.pid
+          User=llm
+          Group=llm
+          WorkingDirectory=/home/llm
+          Environment=HOME=/home/llm
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q6 thinking mtp-vision -np 1
+          Restart=on-failure
+          RestartSec=10
+
+          [Install]
+          WantedBy=multi-user.target
+      loop:
+        - { port: 8001, device: 0, api: vulkan, context: 131072 }
+        - { port: 8002, device: 1, api: vulkan, context: 131072 }
+        - { port: 8003, device: 2, api: vulkan, context: 131072 }
+
     - name: Enable and start llama-server instances (start on VM boot, restart on crash)
       ansible.builtin.systemd:
         name: "llama-server-{{ item.port }}"
@@ -587,7 +586,6 @@
         - { port: 8001 }
         - { port: 8002 }
         - { port: 8003 }
-      #  - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
@@ -595,7 +593,6 @@
         port: "{{ item }}"
         timeout: 900
       loop: [8001, 8002, 8003]
-      # loop: [8001, 8002, 8003, 8004]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -608,7 +605,6 @@
       delay: 10
       changed_when: false
       loop: [8001, 8002, 8003]
-      # loop: [8001, 8002, 8003, 8004]
 
     # ===== Embedding server (RAG: Open WebUI -> Qdrant) =====
     # OpenAI-compatible /v1/embeddings on :8005; Open WebUI runs every

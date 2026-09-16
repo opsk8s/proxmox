@@ -16,10 +16,10 @@ export VLLM_ROCM_USE_AITER=1
 # export VLLM_USE_FLASHINFER_MOE_MXFP4_BF16=1
 # export VLLM_ROCM_USE_AITER_MOE=1
 
-export HIP_FORCE_DEV_KERNARG=1
-export SAFETENSORS_FAST_GPU=1
-export TORCH_BLAS_PREFER_HIPBLASLT=1
-export NCCL_MIN_NCHANNELS=112
+# export HIP_FORCE_DEV_KERNARG=1
+# export SAFETENSORS_FAST_GPU=1
+# export TORCH_BLAS_PREFER_HIPBLASLT=1
+# export NCCL_MIN_NCHANNELS=112
 
 
 # export VLLM_ROCM_USE_AITER=1
@@ -36,7 +36,7 @@ export VLLM_LOGGING_LEVEL=INFO
 
 unset CUDA_VISIBLE_DEVICES
 
-MODEL=${1:-"Qwen/Qwen3.6-27B-FP8"}
+MODEL=${1:-"amd/Qwen3.8-27B-Quark-AWQ-MXFP4"}
 MODEL_ALIAS=${2:-"Qwen3.6-27B"}
 EXTRA_ARGS=("${@:3}")
 
@@ -57,7 +57,7 @@ vllm serve "$MODEL" \
     --tool-call-parser qwen3_xml \
     --reasoning-parser qwen3 \
     --host 0.0.0.0 \
-    --port 8001 "${EXTRA_ARGS[@]}"
+    --port 8004 "${EXTRA_ARGS[@]}"
     # --speculative-config '{"model":"poolside/Laguna-S-2.1-DFlash-INT4","num_speculative_tokens":15,"method":"dflash"}' \
     # --host 0.0.0.0 \
     # --port 8001 "${EXTRA_ARGS[@]}"
