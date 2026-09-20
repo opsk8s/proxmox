@@ -573,9 +573,9 @@
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: vulkan, context: 131072 }
-        - { port: 8002, device: 1, api: vulkan, context: 131072 }
-        - { port: 8003, device: 2, api: vulkan, context: 131072 }
+        - { port: 8001, device: 0, api: rocm, context: 131072 }
+        - { port: 8002, device: 1, api: rocm, context: 131072 }
+        - { port: 8003, device: 2, api: rocm, context: 131072 }
 
     - name: Enable and start llama-server instances (start on VM boot, restart on crash)
       ansible.builtin.systemd:

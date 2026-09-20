@@ -8,7 +8,10 @@
 # in the shared Postgres VM instead of the bundled SQLite file, so they
 # survive re-deploys and are covered by the existing database backups; the
 # OpenAI-compatible (llama.cpp) and DeepSeek endpoints plus the Qdrant
-# vector store are pre-wired as Langflow global variables.
+# vector store are pre-wired as Langflow global variables. Opt-in provider
+# bundles (docs.langflow.org/components-bundle-components) are installed
+# into the same venv as lfx-bundles extras: qdrant, langchain and elastic
+# (ollama ships in the base install).
 - name: Install and configure Langflow (pip package)
   hosts: langflow
   become: true
@@ -34,16 +37,20 @@
     langflow_superuser_password: ""
     langflow_db_password: ""
     # Endpoints handed to flows as global variables (credential type, i.e.
-    # masked in the visual editor). Both LLM endpoints are OpenAI-compatible
-    # and served by the gateway over the trusted .lan TLS: the default is
-    # the code-swarm-agent llama.cpp server on the LLM VM (8002; the other
-    # agents sit at ui-agent.llm.lan / code-smith-agent.llm.lan and are in
-    # the SSRF allowlist below), deepseek.llm.lan the DeepSeek proxy. The
-    # real DeepSeek API key is entered in the UI (it is the user's own
+    # masked in the visual editor). The LLM/embedding endpoints are
+    # OpenAI-compatible and served by the gateway over the trusted .lan TLS:
+    # the default is the code-swarm-agent llama.cpp server on the LLM VM
+    # (8002; the other agents sit at ui-agent.llm.lan /
+    # code-smith-agent.llm.lan and are in the SSRF allowlist below),
+    # deepseek.llm.lan the DeepSeek proxy, and embed.llm.lan the dedicated
+    # llama.cpp embedding server (the chat shards answer /v1/embeddings with
+    # 501, so a flow's embedding components must use this one). The real
+    # DeepSeek API key is entered in the UI (it is the user's own
     # credential); nothing here stores it.
     langflow_llm_base_url: "https://code-swarm-agent.llm.lan/v1"
     langflow_llm_api_key: "local"
     deepseek_base_url: "https://deepseek.llm.lan/v1"
+    embed_base_url: "https://embed.llm.lan/v1"
     # qdrant-client takes the port from the URL when one is given and falls
     # app.qdrant.lan
     qdrant_url: "https://app.qdrant.lan"
@@ -225,9 +232,17 @@
     # extras". Further backends are declared the same way (pgvector,
     # elasticsearch, mongodb, ... — see the extras listed in langflow's
     # METADATA) rather than pip-installing packages by hand.
+    # psycopg + psycopg-binary ride along in both commands: they are
+    # independent PyPI packages with no cross-version constraint, so a
+    # langflow-only resolution can bump the pure-Python shim without the C
+    # extension (2026-09-18: shim 3.3.6 + binary 3.3.5 crashed DB init with
+    # `wait_c() got an unexpected keyword argument 'timeout'`). Requesting
+    # the pair keeps fresh and upgraded venvs in lockstep.
     - name: Install langflow
       ansible.builtin.command:
-        cmd: "{{ uv_bin }} pip install --python {{ langflow_venv }}/bin/python 'langflow[postgresql,opensearch]'"
+        cmd: >-
+          {{ uv_bin }} pip install --python {{ langflow_venv }}/bin/python
+          'langflow[postgresql,opensearch]' psycopg psycopg-binary
       become: true
       become_user: langflow
       when: langflow_installed is failed
@@ -237,12 +252,60 @@
     # stays idempotent and only reports changed on a real upgrade.
     - name: Upgrade langflow
       ansible.builtin.command:
-        cmd: "{{ uv_bin }} pip install --upgrade --python {{ langflow_venv }}/bin/python 'langflow[postgresql,opensearch]'"
+        cmd: >-
+          {{ uv_bin }} pip install --upgrade --python {{ langflow_venv }}/bin/python
+          'langflow[postgresql,opensearch]' psycopg psycopg-binary
       become: true
       become_user: langflow
       when: langflow_installed is succeeded
       register: langflow_upgrade
       changed_when: "'Audited' not in langflow_upgrade.stdout"
+
+    # Provider bundles (docs.langflow.org/components-bundle-components):
+    # opt-in extras of the lfx-bundles metapackage, installed into the same
+    # venv as the engine — lfx discovers them at startup, so the restart
+    # below picks them up. Requested set: qdrant and elastic (the elastic
+    # bundle carries the Elasticsearch + OpenSearch vector stores for the
+    # ELK VM; there is no "langchain" extra — langchain-community is a core
+    # langflow dependency). Ollama needs no extra — its components ship in
+    # the base langflow install. The torch-dependent bundles
+    # (lfx-bundles[all]) are deliberately excluded: no GPU on this VM and
+    # all inference runs on the LLM VM.
+    #
+    # Pinned to 1.1.26: lfx-bundles 1.1.27 (2026-09-19) declares
+    # Requires-Dist lfx>=1.13.0.dev0 — the 1.13 *pre-release* line — while
+    # the newest stable langflow (1.12.2) is built against the lfx 1.12.x
+    # line. An unpinned --upgrade would silently bump the venv to a
+    # pre-release lfx/langflow-sdk half-release and break the running app.
+    # Re-check when langflow ships a stable 1.13.
+    - name: Install the opt-in provider bundles (qdrant, elastic)
+      ansible.builtin.command:
+        cmd: "{{ uv_bin }} pip install --upgrade --python {{ langflow_venv }}/bin/python 'lfx-bundles[qdrant,elastic]==1.1.26'"
+      become: true
+      become_user: langflow
+      register: langflow_bundles
+      changed_when: "'Audited' not in langflow_bundles.stdout"
+
+    # lfx-bundles is ONE package (site-packages/lfx_bundles/<bundle>/);
+    # every bundle's modules are gated on their third-party client being
+    # importable — a missing client makes the loader skip the bundle with
+    # an "Extension optional dependency missing" warning at startup rather
+    # than a hard failure. So the packages that actually switch a bundle on
+    # are its client libraries; verify those import in the venv's python
+    # (qdrant -> qdrant-client, elastic -> elasticsearch + opensearch-py;
+    # langchain-community is a core langflow dependency, and ollama's
+    # components ship in the base install via langchain-ollama).
+    - name: Verify the bundle client libraries import in the venv
+      ansible.builtin.shell: >
+        {{ langflow_venv }}/bin/python -c
+        "import importlib;
+        [importlib.import_module(n)
+         for n in ('qdrant_client','elasticsearch','opensearchpy','langchain_community')]"
+      args:
+        executable: /bin/bash
+      changed_when: false
+      become: true
+      become_user: langflow
 
     # --- service configuration -------------------------------------------------
     # Secrets live in an EnvironmentFile (root:langflow 0640) rather than in
@@ -347,13 +410,19 @@
           # hosts/IPs/CIDR ranges; lfx prefers narrow FQDNs over ranges
           # (lfx/services/settings/groups/security.py). The bare gateway IP
           # would cover every gateway-served name at once.
-          LANGFLOW_SSRF_ALLOWED_HOSTS=ui-agent.llm.lan,code-swarm-agent.llm.lan,code-smith-agent.llm.lan,deepseek.llm.lan,app.qdrant.lan,app.elastic.lan
-          LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=QDRANT_URL,QDRANT_API_KEY,OPENAI_API_BASE_URL,OPENAI_API_KEY,DEEPSEEK_API_BASE_URL
+          LANGFLOW_SSRF_ALLOWED_HOSTS=ui-agent.llm.lan,code-swarm-agent.llm.lan,code-smith-agent.llm.lan,deepseek.llm.lan,embed.llm.lan,app.qdrant.lan,app.elastic.lan
+          LANGFLOW_VARIABLES_TO_GET_FROM_ENVIRONMENT=QDRANT_URL,QDRANT_API_KEY,OPENAI_API_BASE_URL,OPENAI_API_KEY,DEEPSEEK_API_BASE_URL,EMBEDDING_API_BASE_URL,EMBEDDING_API_KEY
           QDRANT_URL={{ qdrant_url }}
           QDRANT_API_KEY={{ qdrant_api_key }}
           OPENAI_API_BASE_URL={{ langflow_llm_base_url }}
           OPENAI_API_KEY={{ langflow_llm_api_key }}
           DEEPSEEK_API_BASE_URL={{ deepseek_base_url }}
+          # RAG: embeddings from the dedicated llama.cpp --embedding server
+          # (embed.llm.lan -> :8005 on the LLM VM). The chat shards answer
+          # /v1/embeddings with 501, so a flow's embedding components must
+          # use this global rather than OPENAI_API_BASE_URL.
+          EMBEDDING_API_BASE_URL={{ embed_base_url }}
+          EMBEDDING_API_KEY={{ langflow_llm_api_key }}
       notify: restart langflow
 
     - name: Deploy langflow.service
@@ -420,6 +489,24 @@
       delay: 10
       changed_when: false
 
+    # At startup the loader logs one line per bundle whose modules it could
+    # not import ("Extension load error" / "Extension optional dependency
+    # missing"), so a requested bundle that failed to load leaves a trace
+    # in the journal; a clean startup contains none of them. The patterns
+    # are anchored on the requested bundles' names and client modules —
+    # other bundles legitimately missing their optional clients (apify,
+    # cloudflare, ...) must not trigger this. The window covers the
+    # restarts this play performed.
+    - name: Fail if the server log shows a load error for a requested bundle
+      ansible.builtin.shell: |
+        set -euo pipefail
+        journalctl -u langflow --no-pager --since=-15min
+          | grep -E "Extension (load error|optional dependency missing)"
+          | grep -E "bundle='(qdrant|elastic|langchain|ollama)'|module='(qdrant_client|elasticsearch|opensearchpy|langchain_community)'|lfx_bundles/(qdrant|elastic|langchain|ollama)/|lfx_ollama/|No module named '(qdrant_client|elasticsearch|opensearchpy|langchain_community|ollama)'"
+      register: langflow_bundle_load_errors
+      failed_when: langflow_bundle_load_errors.rc == 0
+      changed_when: false
+
     # Ubuntu 26.04's system OpenSSL rejects the LAN CA root (generated without
     # a keyUsage extension) in Python's ssl module, so ansible's uri module
     # fails here with "CA cert does not include key usage extension" even
@@ -427,10 +514,10 @@
     # (verified 2026-09-11: venv python reaches these endpoints, system
     # python3 does not). Validate the trust chain with openssl s_client, the
     # same way the nginx play checks the served leaf.
-    - name: Verify the LAN CA validates the gateway leaf for both endpoints
+    - name: Verify the LAN CA validates the gateway leaf for all endpoints
       ansible.builtin.shell: |
         set -euo pipefail
-        for host in code-swarm-agent.llm.lan:443 app.qdrant.lan:443; do
+        for host in code-swarm-agent.llm.lan:443 embed.llm.lan:443 app.qdrant.lan:443; do
             echo | openssl s_client -connect "${host}" \
               -CAfile /usr/local/share/ca-certificates/lan-ca.crt 2>/dev/null \
               | grep -q "Verify return code: 0 (ok)"
@@ -453,6 +540,29 @@
         executable: /bin/bash
       register: langflow_llm
       until: langflow_llm.rc == 0
+      retries: 30
+      delay: 10
+      changed_when: false
+
+    # The embeddings counterpart, and it proves the load mode: the chat
+    # shards answer /v1/embeddings with 501 (the "Start it with `--embeddings`"
+    # error that surfaced in the flow editor), while the dedicated server
+    # returns a vector. The model id comes from /v1/models, so the probe does
+    # not depend on the alias chosen in modules/llm.
+    - name: Verify the embedding endpoint answers with a vector
+      ansible.builtin.shell: |
+        set -euo pipefail
+        model=$(curl -sk --max-time 10 {{ embed_base_url }}/models \
+          | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
+        curl -sk --max-time 60 {{ embed_base_url }}/embeddings \
+          -H 'Content-Type: application/json' \
+          -H "Authorization: Bearer {{ langflow_llm_api_key }}" \
+          -d "{\"model\":\"$model\",\"input\":\"langflow embed probe\"}" \
+          | grep -q '"embedding":\['
+      args:
+        executable: /bin/bash
+      register: langflow_embed
+      until: langflow_embed.rc == 0
       retries: 30
       delay: 10
       changed_when: false
