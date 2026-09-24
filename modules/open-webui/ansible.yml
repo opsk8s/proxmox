@@ -32,6 +32,16 @@
     qdrant_url: "https://app.qdrant.lan:443"
     # qdrant_api_key: terraform / Makefile pass it via extra_vars (proxmox.tfvars)
     qdrant_api_key: ""
+    # Voice STT language: which whisper-server on the LLM VM to point at
+    # (en -> stt.llm.lan :8085 pinned -l en, de -> stt-de.llm.lan :8089
+    # pinned -l de). Flip and re-run this play: the unit below changes, its
+    # handler restarts open-webui, the pip steps are no-ops. Do NOT also set
+    # the STT base URL in Admin Settings — a value stored in webui.db wins
+    # over this env var (same trap as the RAG vars above).
+    stt_lang: en
+    stt_lang_urls:
+      en: https://stt.llm.lan/v1
+      de: https://stt-de.llm.lan/v1
 
   tasks:
     - name: Wait for SSH (first boot)
@@ -300,10 +310,12 @@
           Environment=SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
           Environment=REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
           # Voice mode: STT + TTS live on the LLM VM as OpenAI-compatible
-          # audio endpoints (whisper-server :8085, Kokoro :8086).
+          # audio endpoints (whisper-server :8085/:8089, Kokoro :8086-8088).
+          # STT language = the stt_lang var (which whisper instance, pinned
+          # -l en / -l de); TTS voice likewise switches per endpoint.
           Environment=AUDIO_STT_ENGINE=openai
           Environment=AUDIO_STT_MODEL=large-v3-turbo
-          Environment=AUDIO_STT_OPENAI_API_BASE_URL=https://stt.llm.lan/v1
+          Environment=AUDIO_STT_OPENAI_API_BASE_URL={{ stt_lang_urls[stt_lang] }}
           Environment=AUDIO_STT_OPENAI_API_KEY=local
           Environment=AUDIO_TTS_ENGINE=openai
           Environment=AUDIO_TTS_MODEL=kokoro

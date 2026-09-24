@@ -44,14 +44,22 @@
         name:
           - postgresql
           - postgresql-contrib
-          # Python driver for the community.postgresql db provisioning tasks
-          - python3-psycopg2
         state: present
 
     - name: Detect installed PostgreSQL major version
       ansible.builtin.shell: ls /etc/postgresql
       register: pg_version
       changed_when: false
+
+    # pgvector's apt package is major-version-pinned (postgresql-<major>-pgvector),
+    # so it can only be installed once the major version is known
+    - name: Install pgvector and Python driver
+      ansible.builtin.apt:
+        name:
+          - "postgresql-{{ pg_version.stdout }}-pgvector"
+          # Python driver for the community.postgresql db provisioning tasks
+          - python3-psycopg2
+        state: present
 
     - name: Listen on all interfaces (LAN access)
       ansible.builtin.lineinfile:

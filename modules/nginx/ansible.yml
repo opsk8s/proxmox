@@ -88,6 +88,7 @@
       - code-swarm-agent.llm.lan
       - code-smith-agent.llm.lan
       - stt.llm.lan
+      - stt-de.llm.lan
       - tts.llm.lan
       - tts-de-martin.llm.lan
       - tts-de-victoria.llm.lan
@@ -585,6 +586,32 @@
           }
       }
 
+    # German STT instance on the LLM VM: a second stock whisper-server on
+    # 8089 pinned to -l de (large-v3-turbo's auto-detect misfires German
+    # clips to English). Cloned from stt_vhost; Open WebUI picks the STT
+    # language by pointing AUDIO_STT_OPENAI_API_BASE_URL at stt vs stt-de —
+    # the same switch pattern as tts vs tts-de-*.
+    stt_de_vhost: |
+      server {
+          listen 443 ssl;
+          server_name stt-de.llm.lan;
+          # browser mic captures (webm/ogg) are a few MB
+          client_max_body_size 100M;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8089;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              # long clips + ffmpeg transcode on the upstream
+              proxy_read_timeout 300s;
+              proxy_send_timeout 300s;
+          }
+      }
+
     tts_vhost: |
       server {
           listen 443 ssl;
@@ -1017,6 +1044,7 @@
         - { file: "code-swarm-agent-llm.conf", content: "{{ code_swarm_agent_llm_vhost }}" }
         - { file: "code-smith-agent-llm.conf", content: "{{ code_smith_agent_llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
+        - { file: "stt-de-llm.conf", content: "{{ stt_de_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
         - { file: "tts-de-martin-llm.conf", content: "{{ tts_de_martin_vhost }}" }
         - { file: "tts-de-victoria-llm.conf", content: "{{ tts_de_victoria_vhost }}" }
@@ -1045,6 +1073,7 @@
         - code-swarm-agent-llm.conf
         - code-smith-agent-llm.conf
         - stt-llm.conf
+        - stt-de-llm.conf
         - tts-llm.conf
         - tts-de-martin-llm.conf
         - tts-de-victoria-llm.conf

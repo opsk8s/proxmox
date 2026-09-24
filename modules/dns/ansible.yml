@@ -47,6 +47,7 @@
       - "address=/code-swarm-agent.llm.lan/{{ nginx_ip }}"
       - "address=/code-smith-agent.llm.lan/{{ nginx_ip }}"
       - "address=/stt.llm.lan/{{ nginx_ip }}"
+      - "address=/stt-de.llm.lan/{{ nginx_ip }}"
       - "address=/tts.llm.lan/{{ nginx_ip }}"
       - "address=/tts-de-martin.llm.lan/{{ nginx_ip }}"
       - "address=/tts-de-victoria.llm.lan/{{ nginx_ip }}"

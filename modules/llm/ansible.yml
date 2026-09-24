@@ -37,6 +37,15 @@
     kokoro_de_instances:
       - { name: martin,   port: 8087, model_repo: kikiri-tts/kikiri-german-martin,   model_file: kikiri_german_martin_ep10.pth,   voice: dm_martin,   voice_src: voices/martin.pt }
       - { name: victoria, port: 8088, model_repo: kikiri-tts/kikiri-german-victoria, model_file: kikiri_german_victoria_ep10.pth, voice: dv_victoria, voice_src: voices/victoria.pt }
+    # One stock whisper-server per language: the multilingual model is shared
+    # (there is no separate German model), only port and the pinned -l differ.
+    # Pinning beats -l auto: large-v3-turbo's language auto-detect misfires
+    # German clips to English, and Open WebUI never sends a per-request
+    # language field — so the endpoint IS the language switch (stt vs
+    # stt-de, see the nginx module), same pattern as the German Kokoro TTS.
+    whisper_instances:
+      - { name: "",    port: 8085, lang: en }
+      - { name: "-de", port: 8089, lang: de }
   tasks:
     - name: Wait for SSH (first boot)
       ansible.builtin.wait_for_connection:
@@ -701,7 +710,8 @@
 
     # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
     # Open WebUI talks to these as OpenAI-compatible audio endpoints:
-    #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server)
+    #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server, English)
+    #        http://<llm_ip>:8089/v1/audio/transcriptions (whisper-server, German)
     #   TTS -> http://<llm_ip>:8086/v1/audio/speech        (Kokoro, English)
     #        http://<llm_ip>:8087/v1/audio/speech        (Kokoro, German Martin)
     #        http://<llm_ip>:8088/v1/audio/speech        (Kokoro, German Victoria)
@@ -745,15 +755,15 @@
         group: llm
         mode: "0644"
 
-    - name: Deploy whisper-server systemd unit (STT)
+    - name: Deploy whisper-server systemd units (STT, one stock instance per language)
       ansible.builtin.copy:
-        dest: /etc/systemd/system/whisper-server.service
+        dest: "/etc/systemd/system/whisper-server{{ item.name }}.service"
         owner: root
         group: root
         mode: "0644"
         content: |
           [Unit]
-          Description=whisper.cpp transcription server (STT, Vulkan GPU)
+          Description=whisper.cpp transcription server (STT {{ item.lang }}, Vulkan GPU)
           After=network-online.target mnt-models.mount amd-gpu-profile.service
           Wants=network-online.target
 
@@ -763,17 +773,23 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
+          # -l is pinned, not auto: large-v3-turbo's language auto-detect
+          # misfires German clips to English, and Open WebUI never sends a
+          # per-request language field, so this flag is the only lever.
           # --tmp-dir MUST be writable: --convert writes the upload to tmp_dir
           # (default "."), and without it the unit's CWD is / (not writable by
           # llm) so the temp file is never created and ffmpeg fails with
           # "No such file or directory" -> HTTP 500 FFmpeg conversion failed.
-          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port 8085 --convert --tmp-dir /tmp --device 3 -l auto --request-path /v1/audio --inference-path /transcriptions
+          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port {{ item.port }} --convert --tmp-dir /tmp --device 3 -l {{ item.lang }} --request-path /v1/audio --inference-path /transcriptions
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
-      notify: restart whisper-server
+      loop: "{{ whisper_instances }}"
+      loop_control:
+        label: "{{ item.lang }}"
+      notify: "restart whisper-server{{ item.name }}"
 
     - name: Clone Kokoro-FastAPI
       ansible.builtin.git:
@@ -1036,11 +1052,14 @@
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Enable and start whisper-server (STT)
+    - name: Enable and start the whisper-server instances (STT)
       ansible.builtin.systemd:
-        name: whisper-server
+        name: "whisper-server{{ item.name }}"
         state: started
         enabled: true
+      loop: "{{ whisper_instances }}"
+      loop_control:
+        label: "{{ item.lang }}"
 
     - name: Enable and start kokoro (TTS)
       ansible.builtin.systemd:
@@ -1062,7 +1081,7 @@
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 300
-      loop: [8085, 8086, 8087, 8088]
+      loop: [8085, 8086, 8087, 8088, 8089]
 
     # End-to-end German check: synthesize a short clip per instance and require
     # HTTP 200. model 'kokoro' is a valid name for the OpenAI-compat endpoint
@@ -1090,6 +1109,32 @@
       loop_control:
         label: "{{ item.name }}"
 
+    # End-to-end STT round-trip: the German Kokoro instance synthesizes a
+    # known German sentence and whisper-de must transcribe it back as German —
+    # this catches the "German comes back as English" failure at deploy time.
+    # Shell (not uri) because a binary mp3 has to travel TTS-out -> STT-in.
+    - name: Probe the German STT endpoint (TTS -> STT round-trip)
+      ansible.builtin.shell: |
+        set -euo pipefail
+        clip=/tmp/stt-de-probe.mp3
+        trap 'rm -f "$clip"' EXIT
+        curl -sf -X POST http://127.0.0.1:8088/v1/audio/speech \
+          -H 'Content-Type: application/json' \
+          -d '{"model": "kokoro", "input": "Hallo, heute ist ein schoener Tag.", "voice": "dv_victoria", "lang_code": "d", "response_format": "mp3"}' \
+          -o "$clip"
+        text=$(curl -sf -X POST http://127.0.0.1:8089/v1/audio/transcriptions \
+          -F "file=@$clip" -F model=large-v3-turbo \
+          | python3 -c 'import json, sys; print(json.load(sys.stdin)["text"])')
+        echo "transcribed: $text"
+        echo "$text" | grep -qi "Hallo"
+      args:
+        executable: /bin/bash
+      register: stt_de_probe
+      until: stt_de_probe.rc == 0
+      retries: 3
+      delay: 10
+      changed_when: false
+
   handlers:
     - name: reload udev
       ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
@@ -1112,6 +1157,11 @@
     - name: restart whisper-server
       ansible.builtin.systemd:
         name: whisper-server
+        state: restarted
+
+    - name: restart whisper-server-de
+      ansible.builtin.systemd:
+        name: whisper-server-de
         state: restarted
 
     - name: restart llama-embed
