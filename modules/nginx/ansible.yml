@@ -10,6 +10,7 @@
 #   ui-agent.llm.lan                   -> llm:8001
 #   code-swarm-agent.llm.lan           -> llm:8002
 #   code-smith-agent.llm.lan           -> llm:8003
+#   code-assistent.llm.lan             -> llm:8004
 #   deepseek.llm.lan                   -> api.deepseek.com (TLS upstream, body capture)
 #   app.taiga.lan                      -> taiga:8000/8003/8080/8888 (per-location)
 #
@@ -87,6 +88,7 @@
       - ui-agent.llm.lan
       - code-swarm-agent.llm.lan
       - code-smith-agent.llm.lan
+      - code-assistent.llm.lan
       - stt.llm.lan
       - stt-de.llm.lan
       - tts.llm.lan
@@ -539,6 +541,35 @@
 
           location / {
               proxy_pass http://{{ llm_ip }}:8003;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+              proxy_set_header Upgrade $http_upgrade;
+              proxy_set_header Connection $connection_upgrade;
+              proxy_set_header X-Request-Id $request_id;
+              add_header Strict-Transport-Security "max-age=31536000" always;
+              add_header X-Request-Id $request_id always;
+              add_header X-Upstream $upstream_addr always;
+              proxy_buffering off;
+              proxy_read_timeout 3600s;
+              proxy_send_timeout 3600s;
+
+              access_by_lua_file      /etc/nginx/lua/body-capture.lua;
+              body_filter_by_lua_file /etc/nginx/lua/body-capture.lua;
+              log_by_lua_file         /etc/nginx/lua/body-capture.lua;
+          }
+      }
+
+    code_assistent_llm_vhost: |
+      server {
+          listen 443 ssl;
+          server_name code-assistent.llm.lan;
+          client_max_body_size 100M;
+
+          location / {
+              proxy_pass http://{{ llm_ip }}:8004;
               proxy_http_version 1.1;
               proxy_set_header Host $host;
               proxy_set_header X-Real-IP $remote_addr;
@@ -1043,6 +1074,7 @@
         - { file: "ui-agent-llm.conf", content: "{{ ui_agent_llm_vhost }}" }
         - { file: "code-swarm-agent-llm.conf", content: "{{ code_swarm_agent_llm_vhost }}" }
         - { file: "code-smith-agent-llm.conf", content: "{{ code_smith_agent_llm_vhost }}" }
+        - { file: "code-assistent-llm.conf", content: "{{ code_assistent_llm_vhost }}" }
         - { file: "stt-llm.conf", content: "{{ stt_vhost }}" }
         - { file: "stt-de-llm.conf", content: "{{ stt_de_vhost }}" }
         - { file: "tts-llm.conf", content: "{{ tts_vhost }}" }
@@ -1072,6 +1104,7 @@
         - ui-agent-llm.conf
         - code-swarm-agent-llm.conf
         - code-smith-agent-llm.conf
+        - code-assistent-llm.conf
         - stt-llm.conf
         - stt-de-llm.conf
         - tts-llm.conf

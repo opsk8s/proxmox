@@ -334,6 +334,23 @@
       register: hf_token_result
       changed_when: false
 #
+    - name: Download Qwen2.5-Coder 14B Q6 model via wget
+      ansible.builtin.shell: |
+        # Define the direct URL for the specific GGUF file
+        MODEL_URL="https://huggingface.co/unsloth/Qwen2.5-Coder-14B-Instruct-128K-GGUF/resolve/main/Qwen2.5-Coder-14B-Instruct-Q6_K.gguf"
+        OUTPUT_FILE="/mnt/models/Qwen2.5-Coder-14B-Instruct-Q6_K_XL.gguf"
+
+        # Download using wget with Authorization header
+        wget --header="Authorization: Bearer {{ hf_token_result.stdout }}" \
+             -O "${OUTPUT_FILE}" \
+             "${MODEL_URL}"
+      args:
+        executable: /bin/bash
+        # Idempotency: Only run if the file does NOT exist
+        creates: /mnt/models/Qwen2.5-Coder-14B-Instruct-Q6_K_XL.gguf
+      become: true
+      become_user: llm
+#
     - name: Download Qwen3.8 Q4 model via wget
       ansible.builtin.shell: |
         # Define the direct URL for the specific GGUF file
@@ -575,16 +592,17 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} Qwen3.8-27B Q6 thinking mtp-vision -np 1
+          ExecStart=/home/llm/scripts/start-server.sh {{ item.api }} {{ item.port }} {{ item.context }} {{ item.device }} {{ item.model }} {{ item.quant }} {{ item.temp }} {{ item.draft }} -np 1
           Restart=on-failure
           RestartSec=10
 
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: rocm, context: 131072 }
-        - { port: 8002, device: 1, api: rocm, context: 131072 }
-        - { port: 8003, device: 2, api: rocm, context: 131072 }
+        - { port: 8001, device: 0, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
+        - { port: 8002, device: 1, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
+        - { port: 8003, device: 2, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
+        - { port: 8004, device: 3, api: rocm, context: 64000, model: Qwen2.5-Coder, quant: Q6, temp: instruct, draft: none }
 
     - name: Enable and start llama-server instances (start on VM boot, restart on crash)
       ansible.builtin.systemd:
@@ -595,13 +613,14 @@
         - { port: 8001 }
         - { port: 8002 }
         - { port: 8003 }
+        - { port: 8004 }
 
     - name: Wait for all 4 llama-server ports to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003]
+      loop: [8001, 8002, 8003, 8004]
 
     - name: Verify each server answers /health
       ansible.builtin.uri:
@@ -613,7 +632,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003]
+      loop: [8001, 8002, 8003, 8004]
 
     # ===== Embedding server (RAG: Open WebUI -> Qdrant) =====
     # OpenAI-compatible /v1/embeddings on :8005; Open WebUI runs every
