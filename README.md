@@ -1,4 +1,4 @@
-# Project Analysis: `proxmox-server`
+# Project Analysis: `proxmox-server` (Smith Node with 32 Cores)
 
 IaC for a 10-VM home lab on Proxmox VE: **Terraform** (bpg/proxmox + ansible provider actions) defines the VMs and triggers deployment; **Ansible** playbooks (one per module) install and configure each service; a **Makefile** mirrors the Ansible side for day-2 runs.
 
