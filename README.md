@@ -66,13 +66,6 @@ Playbooks double as the **update mechanism** — notably taiga: re-clone pinned 
 
 ## 4. Secrets handling
 
-- 9 passwords/tokens in gitignored `proxmox.tfvars`; declared in root `variables.tf` **without `sensitive = true`**.
+- tokens delivered via `proxmox.tfvars`; declared in root `variables.tf`
 - Delivery: `--extra-vars` on the Ansible command line (visible in `ps` while a play runs) — via both paths.
-- On-host:
-  - Taiga generates `TAIGA_SECRET_KEY` / `RABBITMQ_PASS` once into `/opt/taiga/.env` (0600, `no_log`); rotation = delete file + re-run
-  - Jenkins admin password in a **0644** groovy file plus 0600 JCasC
-  - Agent SSH private key inlined in `jenkins.yaml` (0600) **and** copied to the controller at `/var/lib/jenkins/.ssh/`
-  - `postgres_exporter.env` 0640 with plaintext DSN
-  - LLM VM bakes `HF_TOKEN` into `/etc/environment` (playbook greps it back)
-- Postgres is `scram-sha-256` over the LAN but Taiga connects with `POSTGRES_SSLMODE=disable`.
 
