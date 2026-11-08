@@ -23,11 +23,11 @@ Current setup on the nginx VM (192.168.51.208):
 
 | Item | Location | Lifetime |
 |---|---|---|
-| CA root key  | `/etc/lan-ca/ca.key` (0600, dir 0700) | 10 years |
-| CA root cert | `/etc/lan-ca/ca.pem` | 10 years |
+| CA root key  | `/etc/lan-ca/ca.key` (0600, dir 0700) | 3 years |
+| CA root cert | `/etc/lan-ca/ca.pem` | 3 years |
 | Leaf SAN list | `/etc/lan-ca/domains` | — |
-| Leaf cert | `/etc/nginx/certs/lan.crt` | 730 days |
-| Leaf key   | `/etc/nginx/certs/lan.key` (0600) | 730 days |
+| Leaf cert | `/etc/nginx/certs/lan.crt` | 3 years |
+| Leaf key   | `/etc/nginx/certs/lan.key` (0600) | 3 years |
 | Renewal script | `/usr/local/bin/lan-cert-renew.sh` | — |
 | Renewal timer | `lan-cert-renew.timer` (daily) | — |
 
