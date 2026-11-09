@@ -17,11 +17,11 @@ output "data_proxmox_version" {
 }
 
 data "local_file" "public_key" {
-  filename = "/Users/ffhs/.ssh/proxmox-ubuntu.pub"
+  filename = "~/.ssh/proxmox-ubuntu.pub"
 }
 
 data "local_file" "jenkins_public_key" {
-  filename = "/Users/ffhs/.ssh/jenkins-agent.pub"
+  filename = "~/.ssh/jenkins-agent.pub"
 }
 
 module "llm" {
