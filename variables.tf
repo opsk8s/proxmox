@@ -188,6 +188,11 @@ variable "langflow_ip" {
   description = "IP of the Langflow (visual agent/flow builder) VM"
 }
 
+variable "devbox_ip" {
+  type        = string
+  description = "IP of the dev box (development workstation) VM"
+}
+
 variable "keyboard_layout" {
   type        = string
   description = "Keyboard layout for the VM consoles (e.g. de-ch)"
@@ -325,5 +330,15 @@ variable "langflow_cpu_cores" {
 variable "langflow_memory_mb" {
   type    = number
   default = 4096
+}
+
+variable "devbox_cpu_cores" {
+  type    = number
+  default = 16
+}
+
+variable "devbox_memory_mb" {
+  type    = number
+  default = 16384
 }
 

@@ -4,22 +4,29 @@
   become: true
   gather_facts: false
   vars:
-    # Kokoro TTS runs on ROCm torch. Kokoro-FastAPI has no GPU-index setting
+    # Kokoro TTS runs on CUDA torch. Kokoro-FastAPI has no GPU-index setting
     # (device is just "cuda" or "cpu"), so the card is chosen by restricting
-    # what the process can see. ROCm device order != Vulkan device order
-    # (llama-server/whisper use Vulkan 0-3) — verify with `rocm-smi --showbus`.
-    # Card 0 also hosts whisper.cpp, so 1-3 have the most headroom.
-    kokoro_gpu: "3"
+    # what the process can see (CUDA_VISIBLE_DEVICES).
+    # NOTE: 2x RTX 3090 (24GB each). GPU 0 runs the chat server; GPU 1 is
+    # reserved for whisper, Kokoro and the embedding server.
+    kokoro_gpu: "1"
     # Dedicated embedding server for RAG (Open WebUI -> Qdrant). It is a
     # separate instance because --embedding RESTRICTS a llama-server to the
-    # embedding use case, so it cannot be folded into the 8001-8004 chat
-    # shards. --pooling is deliberately left unset: the GGUF carries
+    # embedding use case, so it cannot be folded into the 8001 chat server. --pooling is deliberately left unset: the GGUF carries
     # qwen3.pooling_type = 3 (LAST, the pooling Qwen3-Embedding expects) and
     # llama.cpp uses the model default when the flag is absent. Output is
-    # 1024-dim (qwen3.embedding_length). Vulkan device 2: the four chat
-    # shards hold ~22 GB of the 32 GB on cards 0-3 and card 3 additionally
-    # hosts whisper + Kokoro (~25 GB used), so 0-2 have the headroom.
-    embed_gpu: "3"
+    # 1024-dim (qwen3.embedding_length). CUDA device 1 hosts whisper + Kokoro;
+    # the embedding model is tiny (~0.6B) and shares that card.
+    embed_gpu: "1"
+
+    # NVIDIA/CUDA stack pins — verify these are current before applying.
+    nvidia_driver: "nvidia-driver-580-open"
+    nvidia_utils: "nvidia-utils-580"
+    # ubuntu2604's NVIDIA repo has no 13.0 build; its oldest is 13.3.
+    cuda_toolkit: "cuda-toolkit-13-3"
+    cuda_keyring_url: "https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2604/x86_64/cuda-keyring_1.1-1_all.deb"
+    torch_cuda_index: "https://download.pytorch.org/whl/cu130"
+    torch_cuda_version: "2.12.0+cu130"
     embed_port: 8005
     embed_alias: Qwen3-Embedding-0.6B
     embed_model: /mnt/models/Qwen3-Embedding-0.6B-Q8_0.gguf
@@ -62,45 +69,16 @@
     - name: Gather facts
       ansible.builtin.setup:
 
-    # 1. Create the directory (replaces 'mkdir --parents')
-    - name: Create keyrings directory
-      ansible.builtin.file:
-        path: /etc/apt/keyrings
-        state: directory
-        mode: "0755"
+    # The NVIDIA CUDA keyring .deb registers both the repo and its signing key.
+    - name: Download NVIDIA CUDA keyring
+      ansible.builtin.get_url:
+        url: "{{ cuda_keyring_url }}"
+        dest: /tmp/cuda-keyring.deb
+        mode: "0644"
 
-    # 2. Fetch and dearmor BOTH keys (replaces 'wget | gpg | tee')
-    - name: Fetch and dearmor AMD GPG keys
-      ansible.builtin.shell: |
-        wget -qO- {{ item.url }} | gpg --dearmor -o {{ item.key }}
-      args:
-        creates: "{{ item.key }}"
-      loop:
-        - url: https://repo.radeon.com/rocm/rocm.gpg.key
-          key: /etc/apt/keyrings/rocm.gpg
-        - url: https://stable.repo.amd.com/rocm/gpg/packages.gpg
-          key: /etc/apt/keyrings/amdrocm.gpg
-
-    # 3. Add BOTH repositories (replaces 'tee ... .list' / 'tee ... .sources')
-    - name: Add AMD repositories (deb822 format)
-      ansible.builtin.deb822_repository:
-        name: "{{ item.name }}"
-        types: deb
-        uris: "{{ item.uri }}"
-        suites: "{{ item.suite }}"
-        components: main
-        architectures: amd64
-        signed_by: "{{ item.key }}"
-        enabled: true
-      loop:
-        - name: amdgpu
-          uri: https://repo.radeon.com/amdgpu/31.50/ubuntu
-          suite: resolute
-          key: /etc/apt/keyrings/rocm.gpg
-        - name: rocm
-          uri: https://stable.repo.amd.com/rocm/core/packages/ubuntu2604/
-          suite: stable
-          key: /etc/apt/keyrings/amdrocm.gpg
+    - name: Install NVIDIA CUDA keyring
+      ansible.builtin.apt:
+        deb: /tmp/cuda-keyring.deb
 
     # 4. Update APT (replaces 'apt update')
     - name: Update apt cache
@@ -141,47 +119,17 @@
           - btop
           - libatomic1
           - libquadmath0
-          - amdgpu-dkms
-          - amdrocm10.0-gfx1201
-          - amdrocm-core-dev10.0-gfx1201
-          - amdrocm-core-sdk10.0-gfx1201
-          - amdrocm-developer-tools10.0
-          - amdrocm-opencl10.0
+          - "{{ nvidia_driver }}"
+          - "{{ nvidia_utils }}"
+          - "{{ cuda_toolkit }}"
           - build-essential
           - ccache
           - cmake
           - git
           - pkg-config
-          - libvulkan-dev
-          - mesa-vulkan-drivers
-          - vulkan-tools
-          - glslang-tools
           - libssl-dev
-          - glslc
-          - spirv-headers
           - ninja-build
       register: apt_result
-
-    - name: Ensure GPU groups exist
-      ansible.builtin.group:
-        name: "{{ item }}"
-        state: present
-      loop: [ render, video ]
-
-    - name: Add llm to GPU groups
-      ansible.builtin.user:
-        name: llm
-        groups: render,video
-        append: true
-
-    - name: Deploy udev rules
-      ansible.builtin.copy:
-        dest: /etc/udev/rules.d/70-amdgpu.rules
-        mode: "0644"
-        content: |
-          KERNEL=="kfd", GROUP="render", MODE="0666"
-          SUBSYSTEM=="drm", KERNEL=="renderD*", GROUP="render", MODE="0666"
-      notify: reload udev
 
     - name: Grant llm user read-write access to the mount point
       ansible.builtin.file:
@@ -202,24 +150,20 @@
       ansible.builtin.reboot:
       when: apt_result.changed
 
-    - name: Set ROCm environment variables system-wide
+    - name: Set CUDA environment variables system-wide
       ansible.builtin.copy:
-        dest: /etc/profile.d/rocm-env.sh
+        dest: /etc/profile.d/cuda-env.sh
         owner: root
         group: root
         mode: "0644"
         content: |
-          # rocm related
-          export ROCM_PATH=/opt/rocm
-          export HIP_PATH=$ROCM_PATH
-          export HIP_CLANG_PATH="$ROCM_PATH/llvm/bin"
-          export HIP_PLATFORM=amd
-          export PATH="$ROCM_PATH/bin:$ROCM_PATH/llvm/bin:$PATH"
-          export LD_LIBRARY_PATH="$ROCM_PATH/core-10.0/lib:$LD_LIBRARY_PATH"
-          export PYTORCH_ROCM_ARCH="gfx1201"
-          export HIP_ARCHITECTURES="gfx1201"
-          export GPU_TARGETS="gfx1201"
-          # build and vllm related
+          export CUDA_HOME=/usr/local/cuda
+          export PATH="$CUDA_HOME/bin:$PATH"
+          export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH"
+          # RTX 3090 = compute capability 8.6 (sm_86)
+          export CMAKE_CUDA_ARCHITECTURES="86"
+          export TORCH_CUDA_ARCH_LIST="8.6"
+          # build parallelism
           export MAX_JOBS=$(nproc)
           export CMAKE_BUILD_PARALLEL_LEVEL=$MAX_JOBS
           export TORCHINDUCTOR_COMPILE_THREADS=$MAX_JOBS
@@ -285,39 +229,19 @@
       become: true
       become_user: llm
 
-    - name: Build llama.cpp using the ROCm build script
+    - name: Build llama.cpp using the CUDA build script
       ansible.builtin.shell: |
-        # Explicitly load the ROCm environment variables we added earlier
         source /home/llm/.bashrc
-
-        # Execute the build script
-        /home/llm/scripts/build-llama-rocm.sh
+        /home/llm/scripts/build-llama-cuda.sh
       args:
         executable: /bin/bash
-        # Idempotency: Skip this task if the final compiled binary already exists.
-        # (Adjust this path if your script outputs the binary somewhere else)
-        creates: /home/llm/llama.cpp/build-rocm/bin/llama-cli
-      become: true
-      become_user: llm
-
-    - name: Build llama.cpp using the Vulkan build script
-      ansible.builtin.shell: |
-        # Explicitly load the ROCm environment variables we added earlier
-        source /home/llm/.bashrc
-
-        # Execute the build script
-        /home/llm/scripts/build-llama-vulkan.sh
-      args:
-        executable: /bin/bash
-        # Idempotency: Skip this task if the final compiled binary already exists.
-        # (Adjust this path if your script outputs the binary somewhere else)
-        creates: /home/llm/llama.cpp/build-vulkan/bin/llama-cli
+        creates: /home/llm/llama.cpp/build-cuda/bin/llama-server
       become: true
       become_user: llm
 
 #    - name: Build vllm using python 3.14
 #      ansible.builtin.shell: |
-#        # Explicitly load the ROCm environment variables we added earlier
+#        # Explicitly load the CUDA environment variables we added earlier
 #
 #        # Execute the build script
 #        /home/llm/scripts/build-vllm.sh
@@ -425,7 +349,7 @@
 #               "${BASE}-${PART}-of-00003.gguf"
 #        done
 #
-#        /home/llm/llama.cpp/build-vulkan/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
+#        /home/llm/llama.cpp/build-cuda/bin/llama-gguf-split --merge /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
 #      args:
 #        executable: /bin/bash
 #        creates: /mnt/models/Qwen3.8-Flash-Next-UD-IQ4_XS.gguf
@@ -535,27 +459,28 @@
         executable: /bin/bash
       when: fluent_bit_shipper.stat.exists
 
-    # GPU power/perf profiles do NOT persist across VM reboots (the amdgpu driver
-    # resets them), so pin them with a oneshot unit that runs on every boot,
-    # ordered before the llama-server units. /usr/bin/amd-smi is used because
+    # NVIDIA persistence mode keeps the driver/context loaded across idle
+    # periods; pin it with a oneshot unit that runs on every boot, ordered
+    # before the llama-server units. /usr/bin/nvidia-smi is used because
     # systemd does not load /etc/profile.d.
-    - name: Deploy AMD GPU profile unit (COMPUTE profile + HIGH perf level at every boot)
+    - name: Deploy NVIDIA GPU profile unit (persistence mode at every boot)
       ansible.builtin.copy:
-        dest: /etc/systemd/system/amd-gpu-profile.service
+        dest: /etc/systemd/system/nvidia-gpu-profile.service
         owner: root
         group: root
         mode: "0644"
         content: |
           [Unit]
-          Description=AMD GPU profile (COMPUTE power profile, HIGH perf level) on all GPUs
+          Description=NVIDIA GPU persistence mode
           After=systemd-modules-load.service
           Before=llama-server-*.service
 
           [Service]
           Type=oneshot
           RemainAfterExit=yes
-          ExecStart=/usr/bin/amd-smi set -g 0 1 2 3 -P COMPUTE
-          ExecStart=/usr/bin/amd-smi set -g 0 1 2 3 -l HIGH
+          ExecStart=/usr/bin/nvidia-smi -pm 1
+          # Optional power cap (RTX 3090 TDP 350W): uncomment to enforce
+          # ExecStart=/usr/bin/nvidia-smi -pl 350
 
           [Install]
           WantedBy=multi-user.target
@@ -564,16 +489,16 @@
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Enable AMD GPU profile unit (runs on every VM boot)
+    - name: Enable NVIDIA GPU profile unit (runs on every VM boot)
       ansible.builtin.systemd:
-        name: amd-gpu-profile
+        name: nvidia-gpu-profile
         state: started
         enabled: true
 
-    # One systemd unit per GPU: start-server.sh self-daemonizes (nohup + pid file),
-    # so the unit is Type=forking. The script's pre-flight kills any stale instance
-    # on the port, which also makes systemctl restart behave.
-    - name: Deploy llama-server systemd units (one per GPU/port)
+    # start-server.sh self-daemonizes (nohup + pid file), so the unit is
+    # Type=forking. The script's pre-flight kills any stale instance on the
+    # port, which also makes systemctl restart behave.
+    - name: Deploy llama-server systemd unit
       ansible.builtin.copy:
         dest: "/etc/systemd/system/llama-server-{{ item.port }}.service"
         owner: root
@@ -599,30 +524,42 @@
           [Install]
           WantedBy=multi-user.target
       loop:
-        - { port: 8001, device: 0, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
-        - { port: 8002, device: 1, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
-        - { port: 8003, device: 2, api: rocm, context: 131072, model: Qwen3.8-27B, quant: Q6, temp: thinking, draft: mtp-vision }
-        - { port: 8004, device: 3, api: rocm, context: 64000, model: Qwen2.5-Coder, quant: Q6, temp: instruct, draft: none }
+        - { port: 8001, device: 0, api: cuda, context: 131072, model: Qwen3.8-27B, quant: Q4, temp: thinking, draft: mtp-vision }
 
-    - name: Enable and start llama-server instances (start on VM boot, restart on crash)
+    - name: Stop and disable obsolete llama-server units
+      ansible.builtin.systemd:
+        name: "llama-server-{{ item }}"
+        state: stopped
+        enabled: false
+      failed_when: false
+      loop: [8002, 8003, 8004]
+
+    - name: Remove obsolete llama-server unit files
+      ansible.builtin.file:
+        path: "/etc/systemd/system/llama-server-{{ item }}.service"
+        state: absent
+      loop: [8002, 8003, 8004]
+
+    - name: Reload systemd after removing obsolete units
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start llama-server instance (start on VM boot, restart on crash)
       ansible.builtin.systemd:
         name: "llama-server-{{ item.port }}"
         state: started
         enabled: true
       loop:
         - { port: 8001 }
-        - { port: 8002 }
-        - { port: 8003 }
-        - { port: 8004 }
 
-    - name: Wait for all 4 llama-server ports to come up
+    - name: Wait for llama-server port to come up
       ansible.builtin.wait_for:
         host: 127.0.0.1
         port: "{{ item }}"
         timeout: 900
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001]
 
-    - name: Verify each server answers /health
+    - name: Verify the server answers /health
       ansible.builtin.uri:
         url: "http://127.0.0.1:{{ item }}/health"
         status_code: 200
@@ -632,7 +569,7 @@
       retries: 30
       delay: 10
       changed_when: false
-      loop: [8001, 8002, 8003, 8004]
+      loop: [8001]
 
     # ===== Embedding server (RAG: Open WebUI -> Qdrant) =====
     # OpenAI-compatible /v1/embeddings on :8005; Open WebUI runs every
@@ -655,8 +592,8 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=llama.cpp embedding server (OpenAI-compatible /v1/embeddings, Vulkan GPU)
-          After=network-online.target mnt-models.mount amd-gpu-profile.service
+          Description=llama.cpp embedding server (OpenAI-compatible /v1/embeddings, CUDA GPU)
+          After=network-online.target mnt-models.mount nvidia-gpu-profile.service
           Wants=network-online.target
 
           [Service]
@@ -665,13 +602,13 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
-          ExecStart=/home/llm/llama.cpp/build-vulkan/bin/llama-server \
+          ExecStart=/home/llm/llama.cpp/build-cuda/bin/llama-server \
             --model {{ embed_model }} \
             --alias {{ embed_alias }} \
             --embedding \
             --host 0.0.0.0 \
             --port {{ embed_port }} \
-            --device Vulkan{{ embed_gpu }} \
+            --device CUDA{{ embed_gpu }} \
             --n-gpu-layers 999 \
             --ctx-size 8192 \
             --batch-size 2048 \
@@ -727,7 +664,7 @@
           /v1/embeddings answered but returned no usable vector
           ({{ embed_probe.json.data[0].embedding | default([]) | length }} dims)
 
-    # ===== Voice mode: whisper.cpp STT (Vulkan) + Kokoro TTS (CPU) =====
+    # ===== Voice mode: whisper.cpp STT (CUDA) + Kokoro TTS (CUDA) =====
     # Open WebUI talks to these as OpenAI-compatible audio endpoints:
     #   STT -> http://<llm_ip>:8085/v1/audio/transcriptions (whisper-server, English)
     #        http://<llm_ip>:8089/v1/audio/transcriptions (whisper-server, German)
@@ -755,14 +692,19 @@
       become: true
       become_user: llm
 
-    - name: Build whisper.cpp with Vulkan (whisper-server)
+    - name: Build whisper.cpp with CUDA (whisper-server)
       ansible.builtin.shell: |
-        cmake -B build-vulkan -DGGML_VULKAN=ON -DWHISPER_BUILD_SERVER=ON -DCMAKE_BUILD_TYPE=Release
-        cmake --build build-vulkan --config Release -j$(nproc)
+        set -euo pipefail
+        rm -rf build-cuda
+        cmake -B build-cuda -DGGML_CUDA=ON -DWHISPER_BUILD_SERVER=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES="86"
+        cmake --build build-cuda --config Release -j$(nproc)
       args:
         chdir: /home/llm/whisper.cpp
         executable: /bin/bash
-        creates: /home/llm/whisper.cpp/build-vulkan/bin/whisper-server
+        creates: /home/llm/whisper.cpp/build-cuda/bin/whisper-server
+      environment:
+        PATH: "/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+        CUDACXX: /usr/local/cuda/bin/nvcc
       become: true
       become_user: llm
 
@@ -782,8 +724,8 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=whisper.cpp transcription server (STT {{ item.lang }}, Vulkan GPU)
-          After=network-online.target mnt-models.mount amd-gpu-profile.service
+          Description=whisper.cpp transcription server (STT {{ item.lang }}, CUDA GPU)
+          After=network-online.target mnt-models.mount nvidia-gpu-profile.service
           Wants=network-online.target
 
           [Service]
@@ -792,6 +734,9 @@
           Group=llm
           WorkingDirectory=/home/llm
           Environment=HOME=/home/llm
+          # Pin whisper to CUDA device 1 (the embedding model is tiny and shares
+          # this card); chat shards on device 0 stay clear.
+          Environment=CUDA_VISIBLE_DEVICES=1
           # -l is pinned, not auto: large-v3-turbo's language auto-detect
           # misfires German clips to English, and Open WebUI never sends a
           # per-request language field, so this flag is the only lever.
@@ -799,7 +744,7 @@
           # (default "."), and without it the unit's CWD is / (not writable by
           # llm) so the temp file is never created and ffmpeg fails with
           # "No such file or directory" -> HTTP 500 FFmpeg conversion failed.
-          ExecStart=/home/llm/whisper.cpp/build-vulkan/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port {{ item.port }} --convert --tmp-dir /tmp --device 3 -l {{ item.lang }} --request-path /v1/audio --inference-path /transcriptions
+          ExecStart=/home/llm/whisper.cpp/build-cuda/bin/whisper-server -m /mnt/models/ggml-large-v3-turbo.bin --host 0.0.0.0 --port {{ item.port }} --convert --tmp-dir /tmp -l {{ item.lang }} --request-path /v1/audio --inference-path /transcriptions
           Restart=on-failure
           RestartSec=10
 
@@ -832,20 +777,18 @@
       # every time instead of gating on `creates: .venv` (which would skip the
       # sync when a previous run died partway through). torch is excluded
       # because uv sync enforces the lock (CPU torch wheel) and would revert
-      # the ROCm build installed by the next task on every run.
+      # the CUDA build installed by the next task on every run.
       changed_when: false
 
-    # ROCm PyTorch for gfx1201, replacing the lock's CPU wheel. Same index and
-    # pins as the vLLM recipe (llm-scripts/build-vllm.sh). Kokoro only needs
-    # torch (no torchvision/torchaudio).
-    - name: Install ROCm PyTorch into the Kokoro venv (gfx1201)
+    # CUDA PyTorch for RTX 3090 (sm_86), replacing the lock's CPU wheel. Kokoro
+    # only needs torch (no torchvision/torchaudio).
+    - name: Install CUDA PyTorch into the Kokoro venv
       ansible.builtin.command:
         cmd: >-
           /home/llm/.local/bin/uv pip install
           --python /home/llm/kokoro-fastapi/.venv/bin/python
-          --index-url https://stable.repo.amd.com/rocm/whl-next/
-          "rocm[libraries,device-gfx1201]==10.0.0"
-          "torch[device-gfx1201]==2.12.0+rocm10.0.0"
+          --index-url {{ torch_cuda_index }}
+          "torch=={{ torch_cuda_version }}"
       become: true
       become_user: llm
       changed_when: false
@@ -868,8 +811,8 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=Kokoro TTS (OpenAI-compatible /v1/audio/speech, ROCm GPU)
-          After=network-online.target amd-gpu-profile.service
+          Description=Kokoro TTS (OpenAI-compatible /v1/audio/speech, CUDA GPU)
+          After=network-online.target nvidia-gpu-profile.service
           Wants=network-online.target
 
           [Service]
@@ -884,16 +827,9 @@
           Environment=MODEL_DIR=/home/llm/kokoro-fastapi/api/src/models
           Environment=VOICES_DIR=/home/llm/kokoro-fastapi/api/src/voices/v1_0
           # Kokoro picks "cuda" when USE_GPU is true and has no index setting,
-          # so the card is chosen by restricting visibility (ROCm torch
-          # enumerates the AMD GPU as a CUDA device).
+          # so the card is chosen by restricting CUDA device visibility.
           Environment=USE_GPU=true
-          Environment=HIP_VISIBLE_DEVICES={{ kokoro_gpu }}
-          # ROCm 7.14/7.15 regression: the HSA async-events loop busy-polls a
-          # full CPU core (rocr::core::Runtime::AsyncEventsLoop) because the
-          # profiler's interrupt signal has no backing event. Disabling HSA
-          # tool/profiler registration stops the spin (99.5% -> 0.0% CPU in
-          # the upstream report). Must be set before the process starts.
-          Environment=HSA_TOOLS_DISABLE_REGISTER=1
+          Environment=CUDA_VISIBLE_DEVICES={{ kokoro_gpu }}
           ExecStart=/home/llm/kokoro-fastapi/.venv/bin/uvicorn api.src.main:app --host 0.0.0.0 --port 8086
           Restart=on-failure
           RestartSec=10
@@ -926,17 +862,16 @@
       become: true
       become_user: llm
       # Same as the English instance: uv sync self-heals a half-built venv, and
-      # torch is excluded so the next task's ROCm wheel is not reverted.
+      # torch is excluded so the next task's CUDA wheel is not reverted.
       changed_when: false
 
-    - name: Install ROCm PyTorch into the German Kokoro venv (gfx1201)
+    - name: Install CUDA PyTorch into the German Kokoro venv
       ansible.builtin.command:
         cmd: >-
           /home/llm/.local/bin/uv pip install
           --python {{ kokoro_de_dir }}/.venv/bin/python
-          --index-url https://stable.repo.amd.com/rocm/whl-next/
-          "rocm[libraries,device-gfx1201]==10.0.0"
-          "torch[device-gfx1201]==2.12.0+rocm10.0.0"
+          --index-url {{ torch_cuda_index }}
+          "torch=={{ torch_cuda_version }}"
       become: true
       become_user: llm
       changed_when: false
@@ -946,7 +881,7 @@
     # REPLACE the stock packages uv sync just installed. misaki goes first (it
     # pulls the [de] extras); kokoro goes in --no-deps so it does NOT
     # re-resolve its declared misaki[en]/torch deps back to the PyPI stock/CPU
-    # builds. The ROCm torch from the previous task satisfies kokoro's torch.
+    # builds. The CUDA torch from the previous task satisfies kokoro's torch.
     - name: Install the German misaki[de] fork
       ansible.builtin.command:
         cmd: >-
@@ -1036,8 +971,8 @@
         mode: "0644"
         content: |
           [Unit]
-          Description=Kokoro TTS German - {{ item.name }} (OpenAI-compatible /v1/audio/speech, ROCm GPU)
-          After=network-online.target amd-gpu-profile.service
+          Description=Kokoro TTS German - {{ item.name }} (OpenAI-compatible /v1/audio/speech, CUDA GPU)
+          After=network-online.target nvidia-gpu-profile.service
           Wants=network-online.target
 
           [Service]
@@ -1054,8 +989,7 @@
           Environment=DEFAULT_VOICE={{ item.voice }}
           Environment=DEFAULT_VOICE_CODE=d
           Environment=USE_GPU=true
-          Environment=HIP_VISIBLE_DEVICES={{ kokoro_gpu }}
-          Environment=HSA_TOOLS_DISABLE_REGISTER=1
+          Environment=CUDA_VISIBLE_DEVICES={{ kokoro_gpu }}
           ExecStart={{ kokoro_de_dir }}/.venv/bin/uvicorn api.src.main:app --host 0.0.0.0 --port {{ item.port }}
           Restart=on-failure
           RestartSec=10
@@ -1155,9 +1089,6 @@
       changed_when: false
 
   handlers:
-    - name: reload udev
-      ansible.builtin.shell: udevadm control --reload-rules && udevadm trigger
-
     - name: restart kokoro
       ansible.builtin.systemd:
         name: kokoro

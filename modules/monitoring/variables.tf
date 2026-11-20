@@ -83,6 +83,10 @@ variable "langflow_ip" {
   type = string
 }
 
+variable "devbox_ip" {
+  type = string
+}
+
 variable "grafana_admin_password" {
   type = string
 }

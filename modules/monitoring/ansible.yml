@@ -57,6 +57,8 @@
               labels: {instance_name: "qdrant"}
             - targets: ["{{ langflow_ip }}:9100"]
               labels: {instance_name: "langflow"}
+            - targets: ["{{ devbox_ip }}:9100"]
+              labels: {instance_name: "devbox"}
 
         # llama.cpp servers: native /metrics endpoint (one per GPU, plus the
         # dedicated embedding instance on 8005)

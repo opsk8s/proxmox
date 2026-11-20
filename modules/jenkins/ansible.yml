@@ -15,7 +15,7 @@
     jenkins_http_protocol: http
     jenkins_http_port: 8080
     jenkins_agent_user: jenkins
-    jenkins_agent_ssh_key_path: /Users/ffhs/.ssh/jenkins-agent
+    jenkins_agent_ssh_key_path: /Users/w8s/.ssh/jenkins-agent
     jenkins_agent_ssh_key: "{{ lookup('file', jenkins_agent_ssh_key_path) | trim }}"
     
     bootstrap_plugins:

@@ -84,6 +84,21 @@
         line: "host    all             all             {{ lan_subnet }}    scram-sha-256"
         insertafter: EOF
 
+    # listen_addresses and dynamic_shared_memory_type only take effect after a
+    # restart. Restart unconditionally: the config file may already carry the
+    # sysv setting from a previous run whose postmaster never got restarted.
+    - name: Restart PostgreSQL to apply configuration
+      ansible.builtin.systemd:
+        name: postgresql
+        state: restarted
+        enabled: true
+
+    - name: Wait for PostgreSQL to listen
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: "{{ pg_port }}"
+        timeout: 120
+
     # password embedded as a SQL literal with single quotes doubled;
     # argv list means no shell, so other special characters are safe
     - name: Set superuser password
@@ -96,18 +111,6 @@
           - "ALTER USER postgres WITH PASSWORD '{{ postgres_password | replace(\"'\", \"''\") }}';"
       become_user: postgres
       changed_when: true
-
-    - name: Enable and start PostgreSQL
-      ansible.builtin.systemd:
-        name: postgresql
-        state: started
-        enabled: true
-
-    - name: Wait for PostgreSQL to listen
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: "{{ pg_port }}"
-        timeout: 120
 
     # --- Databases (declarative, from database.yaml) --------------------------
     # The template lookup renders {{ *_password }} in database.yaml from the
