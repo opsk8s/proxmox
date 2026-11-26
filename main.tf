@@ -17,11 +17,11 @@ output "data_proxmox_version" {
 }
 
 data "local_file" "public_key" {
-  filename = "~/.ssh/proxmox-ubuntu.pub"
+  filename = "/Users/w8s/.ssh/proxmox-ubuntu.pub"
 }
 
 data "local_file" "jenkins_public_key" {
-  filename = "~/.ssh/jenkins-agent.pub"
+  filename = "/Users/w8s/.ssh/jenkins-agent.pub"
 }
 
 module "llm" {
@@ -105,7 +105,9 @@ module "open_webui" {
   qdrant_api_key       = var.qdrant_api_key
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+  # The play fetches the LAN CA from the nginx gateway and verifies the full
+  # RAG path (embed.llm.lan -> llm, app.qdrant.lan -> qdrant) end to end.
+  depends_on = [module.dns, module.llm, module.nginx, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 module "postgres" {
@@ -181,6 +183,7 @@ module "monitoring" {
   git_ip                 = var.git_ip
   qdrant_ip              = var.qdrant_ip
   langflow_ip            = var.langflow_ip
+  devbox_ip              = var.devbox_ip
   keyboard_layout        = var.keyboard_layout
 
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
@@ -262,7 +265,9 @@ module "nginx" {
   lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+  # The play waits for OpenSearch (elk_ip:9200) and verifies the kibana and
+  # qdrant vhosts against the live backends, so both must exist first.
+  depends_on = [module.dns, module.elk, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 module "git" {
@@ -302,6 +307,25 @@ module "qdrant" {
   qdrant_api_key       = var.qdrant_api_key
   keyboard_layout      = var.keyboard_layout
 
+  depends_on = [module.dns, module.llm, proxmox_download_file.fedora_cloud_image]
+}
+
+module "devbox" {
+  source               = "./modules/devbox"
+  main_node            = var.main_node
+  backup_dir           = var.backup_dir
+  vm_dir               = var.vm_dir
+  ubuntu_image_id      = proxmox_download_file.ubuntu_cloud_image.id
+  ssh_public_key       = trimspace(data.local_file.public_key.content)
+  ssh_private_key_file = var.ssh_private_key_file
+  cpu_cores            = var.devbox_cpu_cores
+  memory_mb            = var.devbox_memory_mb
+  lan_ip               = var.devbox_ip
+  lan_network          = var.lan_network
+  lan_gateway          = var.lan_gateway
+  dns_ip               = var.dns_ip
+  keyboard_layout      = var.keyboard_layout
+
   depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
 }
 
@@ -327,7 +351,10 @@ module "langflow" {
   langflow_db_password        = var.langflow_db_password
   keyboard_layout             = var.keyboard_layout
 
-  depends_on = [module.dns, module.postgres, module.nginx, proxmox_download_file.fedora_cloud_image]
+  # The play fetches the LAN CA from nginx, migrates the postgres database,
+  # probes the embedding server on the llm VM, and verifies app.qdrant.lan
+  # answers 200 with the API key.
+  depends_on = [module.dns, module.postgres, module.nginx, module.llm, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 #  zpool import -f os-ssd-fast

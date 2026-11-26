@@ -1,0 +1,13 @@
+#cloud-config
+hostname: devbox
+timezone: Europe/Zurich
+users:
+  - name: devbox
+    groups: [sudo]
+    shell: /bin/bash
+    ssh_authorized_keys:
+      - ${devbox_public_key}
+    sudo: ALL=(ALL) NOPASSWD:ALL
+packages:
+  - qemu-guest-agent
+  - openssh-server

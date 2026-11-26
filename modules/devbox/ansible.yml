@@ -1,0 +1,155 @@
+---
+# Dev box — development workstation VM (16 vCPU by default).
+# No service, no public endpoint: it is an SSH-only box for local
+# compilation (C/C++, Rust, Python, Node). The toolchain is installed for
+# the `devbox` user (cloud-init), not system-wide:
+#   - C/C++: apt toolchain (build-essential, clang/LLVM, cmake, ninja, ...)
+#   - Rust:  rustup stable (user-level, ~/.cargo) — rustfmt + clippy included
+#   - Python: uv-managed latest 3.14.x (user-level, uv python install 3.14)
+#   - Node:  nvm + Node LTS (user-level, ~/.nvm, default alias -> lts/*)
+# All installs are idempotent (creates:/version checks) so re-running after
+# `terraform apply` is a no-op.
+- name: Install the development toolchain
+  hosts: devbox
+  become: true
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: /usr/bin/python3
+    devbox_user: devbox
+    devbox_home: /home/devbox
+    uv_bin: "{{ devbox_home }}/.local/bin/uv"
+    rustup_home: "{{ devbox_home }}/.cargo"
+    nvm_dir: "{{ devbox_home }}/.nvm"
+    nvm_version: "v0.40.8"
+    nvm_install_url: "https://raw.githubusercontent.com/nvm-sh/nvm/{{ nvm_version }}/install.sh"
+
+  tasks:
+    - name: Wait for SSH (first boot)
+      ansible.builtin.wait_for_connection:
+        timeout: 150
+        delay: 5
+        sleep: 5
+
+    - name: Wait for cloud-init to finish
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Set OS hostname
+      ansible.builtin.hostname:
+        name: devbox
+
+    # --- C/C++ toolchain (system-wide) ------------------------------------------
+    # The standard build stack: gcc/clang + the build-system tooling C/C++
+    # projects pull in (cmake, ninja, pkg-config, autotools, bison/flex).
+    - name: Install the C/C++ development toolchain
+      ansible.builtin.apt:
+        update_cache: true
+        name:
+          - build-essential
+          - clang
+          - lldb
+          - cmake
+          - ninja-build
+          - gdb
+          - pkg-config
+          - autoconf
+          - automake
+          - libtool
+          - bison
+          - flex
+          - git
+          - curl
+          - wget
+          - unzip
+          - ca-certificates
+        state: present
+
+    # --- Rust (user-level, via the official rustup installer) ---------------------
+    # The default profile includes rustc, cargo, rustfmt and clippy.
+    - name: Install Rust (rustup, stable)
+      ansible.builtin.shell: |
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+      args:
+        creates: "{{ rustup_home }}/bin/rustup"
+      become: true
+      become_user: "{{ devbox_user }}"
+
+    # --- uv + Python 3.14 (user-level, repo convention — same as langflow) ---------
+    - name: Install uv
+      ansible.builtin.shell: |
+        curl -LsSf https://astral.sh/uv/install.sh | sh
+      args:
+        creates: "{{ uv_bin }}"
+      become: true
+      become_user: "{{ devbox_user }}"
+
+    - name: Check for an installed Python 3.14 (uv-managed)
+      ansible.builtin.shell: |
+        ls -d {{ devbox_home }}/.local/share/uv/python/cpython-3.14.* 2>/dev/null | head -n1
+      become: true
+      become_user: "{{ devbox_user }}"
+      register: devbox_python314
+      failed_when: false
+      changed_when: false
+
+    # "3.14" resolves to the latest 3.14.x patch release uv knows about.
+    - name: Install the latest Python 3.14.x via uv
+      ansible.builtin.shell: "{{ uv_bin }} python install 3.14"
+      become: true
+      become_user: "{{ devbox_user }}"
+      when: devbox_python314.stdout | length == 0
+
+    # --- Node.js (nvm + LTS, user-level) ------------------------------------------
+    - name: Install nvm
+      ansible.builtin.shell: |
+        curl -fsSL {{ nvm_install_url }} | PROFILE="/dev/null" bash
+      args:
+        creates: "{{ nvm_dir }}/nvm.sh"
+      become: true
+      become_user: "{{ devbox_user }}"
+
+    - name: Check for an installed Node version (nvm)
+      ansible.builtin.shell: |
+        ls -d {{ nvm_dir }}/versions/node/* 2>/dev/null | head -n1
+      become: true
+      become_user: "{{ devbox_user }}"
+      register: devbox_node
+      failed_when: false
+      changed_when: false
+
+    # Installs the current Node LTS and points the default alias at it, so
+    # plain `node`/`npm` work in every new shell without nvm use.
+    - name: Install Node LTS and set the nvm default alias
+      ansible.builtin.shell: |
+        export NVM_DIR={{ nvm_dir }}
+        . "$NVM_DIR/nvm.sh"
+        nvm install --lts
+        nvm alias default 'lts/*'
+      become: true
+      become_user: "{{ devbox_user }}"
+      when: devbox_node.stdout | length == 0
+      changed_when: true
+
+    # --- Verification ---------------------------------------------------------------
+    - name: Verify the toolchain versions
+      ansible.builtin.shell: |
+        set -euo pipefail
+        g++ --version | head -n1
+        clang --version | head -n1
+        cmake --version | head -n1
+        ninja --version
+        gdb --version | head -n1
+        {{ rustup_home }}/bin/rustc --version
+        {{ rustup_home }}/bin/cargo --version
+        {{ uv_bin }} --version
+        {{ uv_bin }} python find 3.14
+        export NVM_DIR={{ nvm_dir }}
+        . "$NVM_DIR/nvm.sh"
+        nvm use default >/dev/null
+        node --version
+        npm --version
+      become: true
+      become_user: "{{ devbox_user }}"
+      changed_when: false

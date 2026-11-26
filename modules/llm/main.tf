@@ -18,7 +18,7 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   name            = "llm-ubuntu"
   node_name       = var.main_node
   vm_id           = 100
-  tags            = ["ubuntu", "llm", "rocm", "amd"]
+  tags            = ["ubuntu", "llm", "cuda", "nvidia"]
   stop_on_destroy = true
 
   agent {
@@ -81,38 +81,20 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
   # GPU 1
   hostpci {
     device = "hostpci0"
-    id     = "0000:03:00.0"
+    id     = "0000:01:00.0"
   }
   hostpci {
     device = "hostpci1"
-    id     = "0000:03:00.1"
+    id     = "0000:01:00.1"
   }
   # GPU 2
   hostpci {
     device = "hostpci2"
-    id     = "0000:2d:00.0"
+    id     = "0000:2b:00.0"
   }
   hostpci {
     device = "hostpci3"
-    id     = "0000:2d:00.1"
-  }
-  # GPU 3
-  hostpci {
-    device = "hostpci4"
-    id     = "0000:43:00.0"
-  }
-  hostpci {
-    device = "hostpci5"
-    id     = "0000:43:00.1"
-  }
-  # GPU 4
-  hostpci {
-    device = "hostpci6"
-    id     = "0000:63:00.0"
-  }
-  hostpci {
-    device = "hostpci7"
-    id     = "0000:63:00.1"
+    id     = "0000:2b:00.1"
   }
 
   keyboard_layout = var.keyboard_layout
@@ -131,10 +113,10 @@ resource "proxmox_virtual_environment_vm" "llm_vm" {
 }
 
 
-# AMD GPU profiles (-P COMPUTE, -l HIGH) are applied on every boot by
-# amd-gpu-profile.service (deployed by ansible.yml, ordered before the
+# NVIDIA persistence mode (-pm 1) is applied on every boot by
+# nvidia-gpu-profile.service (deployed by ansible.yml, ordered before the
 # llama-server units) — no manual action needed.
-# Manual power cap (not applied on boot): sudo amd-smi set -o 300
+# Manual power cap (not applied on boot): sudo nvidia-smi -pl 350
 action "ansible_playbook_run" "configure_llm" {
   config {
     playbooks        = ["${path.module}/ansible.yml"]

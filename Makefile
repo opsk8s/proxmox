@@ -7,7 +7,7 @@ TFVARS           ?= proxmox.tfvars
 # Read a quoted string variable from $(TFVARS), e.g. $(call tfvar,jenkins_admin_password)
 tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=]*=[[:space:]]*"?([^"]*)"?.*/\1/')
 
-.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-langflow deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
+.PHONY: deploy-all deploy-llm deploy-jenkins deploy-jenkins-agent deploy-open-webui deploy-langflow deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-devbox deploy-monitoring deploy-elk deploy-dns deploy-nginx deploy-exporters deploy-exporter
 
 # Do not echo the recipes of the targets that pass secrets via --extra-vars:
 # make prints a recipe line before running it, which would put the
@@ -22,15 +22,18 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 # ansible_host, so every target passes it via --extra-vars.
 
 # Deploy every service in dependency order, sequentially, stopping on the
-# first failure: dns (foundation) -> elk (hard prereq: deploy-nginx
-# wait_for es:9200) -> independent backends -> nginx (gateway: deploy-
-# langflow and deploy-open-webui fetch the LAN CA from it and verify their
-# https endpoints) -> langflow -> open-webui -> observability (monitoring,
-# exporters).
-# Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
-deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-llm deploy-jenkins \
-	deploy-jenkins-agent deploy-nginx deploy-langflow deploy-open-webui \
-	deploy-monitoring
+# first failure:
+#   dns (foundation)
+#   -> independent backends: llm, elk, postgres, git, jenkins, devbox
+#   -> dependents: taiga (postgres), jenkins-agent (jenkins), qdrant (llm)
+#   -> nginx (gateway: waits for elk's OpenSearch and verifies the qdrant
+#      vhost; langflow and open-webui fetch the LAN CA from it)
+#   -> langflow, open-webui
+#   -> monitoring (observes everything, so it goes last)
+# Run as: make deploy-all  (do NOT pass -j: prerequisite order is not -j-safe).
+deploy-all: deploy-dns deploy-llm deploy-elk deploy-postgres deploy-git deploy-jenkins deploy-devbox \
+	deploy-taiga deploy-jenkins-agent deploy-qdrant deploy-nginx deploy-langflow \
+	deploy-open-webui deploy-monitoring
 
 deploy-llm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/ansible.yml \
@@ -101,6 +104,14 @@ deploy-qdrant:
 		--extra-vars "qdrant_api_key=$(call tfvar,qdrant_api_key) \
 		ansible_host=$(call tfvar,qdrant_ip)"
 
+# Dev box (development workstation) on its own VM: C/C++ toolchain, Rust
+# (rustup), uv + Python 3.14, nvm + Node LTS — SSH-only, no public endpoint
+# and no gateway vhost. Also runs automatically via the Terraform action
+# trigger when the VM is created/updated.
+deploy-devbox:
+	$(ANSIBLE_PLAYBOOK) -i modules/devbox/inventory.ini modules/devbox/ansible.yml \
+		--extra-vars "ansible_host=$(call tfvar,devbox_ip)"
+
 # Monitoring VM (Prometheus + Grafana + blackbox). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
 deploy-monitoring:
@@ -119,7 +130,8 @@ deploy-monitoring:
 		taiga_ip=$(call tfvar,taiga_ip) \
 		git_ip=$(call tfvar,git_ip) \
 		qdrant_ip=$(call tfvar,qdrant_ip) \
-		langflow_ip=$(call tfvar,langflow_ip)"
+		langflow_ip=$(call tfvar,langflow_ip) \
+		devbox_ip=$(call tfvar,devbox_ip)"
 
 # ELK VM (OpenSearch + Dashboards). Also runs automatically
 # via the Terraform action trigger when the VM is created or updated.
@@ -197,7 +209,8 @@ deploy-exporters:
 		"nginx $(call tfvar,nginx_ip)" \
 		"taiga $(call tfvar,taiga_ip)" \
 		"git $(call tfvar,git_ip)" \
-		"qdrant $(call tfvar,qdrant_ip)"; do \
+		"qdrant $(call tfvar,qdrant_ip)" \
+		"devbox $(call tfvar,devbox_ip)"; do \
 		group=$${entry%% *}; ip=$${entry##* }; \
 		$(ANSIBLE_PLAYBOOK) -i modules/monitoring/inventory.ini --limit "$$group" modules/monitoring/exporters.yml \
 		--extra-vars "ansible_host=$$ip jenkins_admin_password=$(call tfvar,jenkins_admin_password) postgres_password=$(call tfvar,postgres_password)"; \

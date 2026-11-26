@@ -1,0 +1,96 @@
+# proxmox-server VMs — source: proxmox.tfvars + modules/*/cloud-init.yaml
+# Usage: append to ~/.ssh/config (chmod 600), then `ssh llm`, `ssh postgres`, ...
+
+Host pve proxmox
+    HostName 192.168.51.200
+    User root
+    # root@pam does not accept ~/.ssh/proxmox-ubuntu or ~/.ssh/id_ed25519 -> password auth
+
+Host llm
+    HostName 192.168.51.201
+    User llm
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host jenkins
+    HostName 192.168.51.202
+    User jenkins
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+# NOTE: this VM's cloud-init installs ~/.ssh/jenkins-agent.pub (user is still "jenkins")
+Host jenkins-agent
+    HostName 192.168.51.203
+    User jenkins
+    IdentityFile ~/.ssh/jenkins-agent
+    IdentitiesOnly yes
+
+Host openwebui open-webui
+    HostName 192.168.51.204
+    User openwebui
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host postgres
+    HostName 192.168.51.205
+    User postgres
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host monitoring
+    HostName 192.168.51.206
+    User monitoring
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host elk
+    HostName 192.168.51.207
+    User elk
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host nginx
+    HostName 192.168.51.208
+    User nginx
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host taiga
+    HostName 192.168.51.209
+    User taiga
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host git
+    HostName 192.168.51.210
+    User git
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host qdrant
+    HostName 192.168.51.211
+    User qdrant
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host langflow
+    HostName 192.168.51.212
+    User langflow
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host devbox
+    HostName 192.168.51.213
+    User devbox
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host dns
+    HostName 192.168.51.220
+    User dns
+    IdentityFile ~/.ssh/proxmox-ubuntu
+    IdentitiesOnly yes
+
+Host *
+    ServerAliveInterval 30
+    ServerAliveCountMax 3
