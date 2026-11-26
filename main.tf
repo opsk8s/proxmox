@@ -105,7 +105,9 @@ module "open_webui" {
   qdrant_api_key       = var.qdrant_api_key
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [module.dns, module.llm, proxmox_download_file.fedora_cloud_image]
+  # The play fetches the LAN CA from the nginx gateway and verifies the full
+  # RAG path (embed.llm.lan -> llm, app.qdrant.lan -> qdrant) end to end.
+  depends_on = [module.dns, module.llm, module.nginx, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 module "postgres" {
@@ -263,7 +265,9 @@ module "nginx" {
   lan_ca_token         = var.lan_ca_token
   keyboard_layout      = var.keyboard_layout
 
-  depends_on = [module.dns, proxmox_download_file.fedora_cloud_image]
+  # The play waits for OpenSearch (elk_ip:9200) and verifies the kibana and
+  # qdrant vhosts against the live backends, so both must exist first.
+  depends_on = [module.dns, module.elk, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 module "git" {
@@ -347,7 +351,10 @@ module "langflow" {
   langflow_db_password        = var.langflow_db_password
   keyboard_layout             = var.keyboard_layout
 
-  depends_on = [module.dns, module.postgres, module.nginx, module.llm, proxmox_download_file.fedora_cloud_image]
+  # The play fetches the LAN CA from nginx, migrates the postgres database,
+  # probes the embedding server on the llm VM, and verifies app.qdrant.lan
+  # answers 200 with the API key.
+  depends_on = [module.dns, module.postgres, module.nginx, module.llm, module.qdrant, proxmox_download_file.fedora_cloud_image]
 }
 
 #  zpool import -f os-ssd-fast

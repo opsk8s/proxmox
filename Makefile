@@ -22,15 +22,18 @@ tfvar = $(shell grep -E '^$1[[:space:]]*=' $(TFVARS) | head -n1 | sed -E 's/^[^=
 # ansible_host, so every target passes it via --extra-vars.
 
 # Deploy every service in dependency order, sequentially, stopping on the
-# first failure: dns (foundation) -> elk (hard prereq: deploy-nginx
-# wait_for es:9200) -> independent backends -> nginx (gateway: deploy-
-# langflow and deploy-open-webui fetch the LAN CA from it and verify their
-# https endpoints) -> langflow -> open-webui -> observability (monitoring,
-# exporters).
-# Run as: make deploy   (do NOT pass -j: prerequisite order is not -j-safe).
-deploy-all: deploy-dns deploy-elk deploy-postgres deploy-taiga deploy-git deploy-qdrant deploy-llm deploy-jenkins \
-	deploy-jenkins-agent deploy-nginx deploy-langflow deploy-open-webui deploy-devbox \
-	deploy-monitoring
+# first failure:
+#   dns (foundation)
+#   -> independent backends: llm, elk, postgres, git, jenkins, devbox
+#   -> dependents: taiga (postgres), jenkins-agent (jenkins), qdrant (llm)
+#   -> nginx (gateway: waits for elk's OpenSearch and verifies the qdrant
+#      vhost; langflow and open-webui fetch the LAN CA from it)
+#   -> langflow, open-webui
+#   -> monitoring (observes everything, so it goes last)
+# Run as: make deploy-all  (do NOT pass -j: prerequisite order is not -j-safe).
+deploy-all: deploy-dns deploy-llm deploy-elk deploy-postgres deploy-git deploy-jenkins deploy-devbox \
+	deploy-taiga deploy-jenkins-agent deploy-qdrant deploy-nginx deploy-langflow \
+	deploy-open-webui deploy-monitoring
 
 deploy-llm:
 	$(ANSIBLE_PLAYBOOK) -i modules/llm/inventory.ini modules/llm/ansible.yml \
